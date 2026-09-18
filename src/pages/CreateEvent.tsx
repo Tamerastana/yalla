@@ -4,7 +4,7 @@ import { addDays, format } from 'date-fns'
 import { Award, Info, ShieldCheck } from 'lucide-react'
 import { CATEGORY_LIST, CATEGORY_META, EMIRATES } from '../lib/categories'
 import { CATEGORY_STOCK_IMAGES, PRESET_VENUES } from '../lib/venues'
-import * as repo from '../lib/repo'
+import { useCreateEvent } from '../hooks/useEvents'
 import { useAuth } from '../context/AuthContext'
 import { Button } from '../components/ui/Button'
 import { Card } from '../components/ui/Card'
@@ -35,6 +35,7 @@ export function CreateEventPage() {
   const [requestOfficial, setRequestOfficial] = useState(canHostOfficial)
   const [pointsPerAttendee, setPointsPerAttendee] = useState(30)
   const [error, setError] = useState('')
+  const createEvent = useCreateEvent()
 
   // RequireAuth (see App.tsx routing) guarantees a user here.
   if (!user) return null
@@ -44,6 +45,7 @@ export function CreateEventPage() {
 
   const submit = (e: FormEvent) => {
     e.preventDefault()
+    setError('')
     const start = new Date(startsAt)
     const end = new Date(start.getTime() + durationHours * 3_600_000)
 
@@ -51,22 +53,26 @@ export function CreateEventPage() {
       ? { name: customName || 'Custom venue', address: customAddress, emirate: customEmirate, point: venue.point }
       : { name: venue.name, address: venue.address, emirate: venue.emirate, point: venue.point }
 
-    const result = repo.createEvent({
-      hostId: user.id,
-      title,
-      description,
-      category,
-      startsAt: start.toISOString(),
-      endsAt: end.toISOString(),
-      location,
-      capacity,
-      priceAED,
-      pointsPerAttendee,
-      imageUrl: CATEGORY_STOCK_IMAGES[category],
-      requestOfficial,
-    })
-    if ('error' in result) return setError(result.error)
-    navigate(`/events/${result.event.id}`)
+    createEvent.mutate(
+      {
+        hostId: user.id,
+        title,
+        description,
+        category,
+        startsAt: start.toISOString(),
+        endsAt: end.toISOString(),
+        location,
+        capacity,
+        priceAED,
+        pointsPerAttendee,
+        imageUrl: CATEGORY_STOCK_IMAGES[category],
+        requestOfficial,
+      },
+      {
+        onSuccess: (event) => navigate(`/events/${event.id}`),
+        onError: (err) => setError(err instanceof Error ? err.message : 'Something went wrong.'),
+      },
+    )
   }
 
   return (
@@ -199,8 +205,8 @@ export function CreateEventPage() {
         </Card>
 
         <FieldError>{error}</FieldError>
-        <Button type="submit" size="lg" className="w-full">
-          Publish event
+        <Button type="submit" size="lg" className="w-full" disabled={createEvent.isPending}>
+          {createEvent.isPending ? 'Publishing…' : 'Publish event'}
         </Button>
       </form>
     </div>

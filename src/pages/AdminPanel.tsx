@@ -1,20 +1,26 @@
 import { Building2, Calendar, ShieldCheck, Users } from 'lucide-react'
-import * as repo from '../lib/repo'
-import { useDbVersion } from '../lib/useDb'
 import { useAuth } from '../context/AuthContext'
+import { useEvents } from '../hooks/useEvents'
+import { useCompanies, usePlayers, useVerifyCompany } from '../hooks/useProfiles'
 import { Avatar } from '../components/ui/Avatar'
 import { Badge } from '../components/ui/Badge'
 import { Button } from '../components/ui/Button'
 import { Card } from '../components/ui/Card'
+import { PageLoader } from '../components/ui/Spinner'
 
 export function AdminPanelPage() {
-  useDbVersion()
   const { user } = useAuth()
-  if (!user || user.role !== 'super_admin') return null
+  const companiesQuery = useCompanies()
+  const eventsQuery = useEvents()
+  const playersQuery = usePlayers()
+  const verifyCompany = useVerifyCompany()
 
-  const companies = repo.allCompanies()
-  const allEvents = repo.listEvents()
-  const players = repo.allUsers()
+  if (!user || user.role !== 'super_admin') return null
+  if (companiesQuery.isLoading || eventsQuery.isLoading || playersQuery.isLoading) return <PageLoader />
+
+  const companies = companiesQuery.data ?? []
+  const allEvents = eventsQuery.data ?? []
+  const players = playersQuery.data ?? []
 
   return (
     <div className="mx-auto max-w-4xl px-4 py-8 sm:px-6">
@@ -49,7 +55,7 @@ export function AdminPanelPage() {
               {c.company?.verified ? (
                 <Badge tone="success">Verified</Badge>
               ) : (
-                <Button size="sm" onClick={() => repo.verifyCompany(user.id, c.id)}>
+                <Button size="sm" disabled={verifyCompany.isPending} onClick={() => verifyCompany.mutate(c.id)}>
                   Verify company
                 </Button>
               )}

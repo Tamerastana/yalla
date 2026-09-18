@@ -3,27 +3,37 @@ import { Link } from 'react-router-dom'
 import { AlertTriangle, Award, Gift, Plus, ShieldCheck, Users } from 'lucide-react'
 import { CATEGORY_META } from '../lib/categories'
 import { formatEventDate } from '../lib/format'
-import * as repo from '../lib/repo'
-import { useDbVersion } from '../lib/useDb'
 import { useAuth } from '../context/AuthContext'
+import { useEventsByHost } from '../hooks/useEvents'
+import { useAllRegistrations } from '../hooks/useRegistrations'
+import { useCompanyRewards, useCreateReward } from '../hooks/useRewards'
 import { Badge } from '../components/ui/Badge'
 import { Button } from '../components/ui/Button'
 import { Card } from '../components/ui/Card'
 import { EmptyState } from '../components/ui/EmptyState'
-import { Input, Label, Textarea } from '../components/ui/Input'
+import { FieldError, Input, Label, Textarea } from '../components/ui/Input'
 import { Modal } from '../components/ui/Modal'
+import { PageLoader } from '../components/ui/Spinner'
 import { SafeImage } from '../components/ui/SafeImage'
 
 export function CompanyDashboardPage() {
-  useDbVersion()
   const { user } = useAuth()
   const [rewardModal, setRewardModal] = useState(false)
-  if (!user || user.role !== 'company') return null
 
-  const events = repo.eventsByHost(user.id).sort((a, b) => +new Date(b.startsAt) - +new Date(a.startsAt))
-  const rewards = repo.rewardsByCompany(user.id)
-  const totalPointsIssued = events.reduce((sum, e) => sum + repo.registrationsForEvent(e.id).filter((r) => r.status === 'attended').reduce((s, r) => s + (r.pointsAwarded ?? 0), 0), 0)
-  const totalAttendees = events.reduce((sum, e) => sum + repo.registrationsForEvent(e.id).length, 0)
+  const eventsQuery = useEventsByHost(user?.id)
+  const registrationsQuery = useAllRegistrations()
+  const rewardsQuery = useCompanyRewards(user?.id)
+
+  if (!user || user.role !== 'company') return null
+  if (eventsQuery.isLoading || registrationsQuery.isLoading) return <PageLoader />
+
+  const events = [...(eventsQuery.data ?? [])].sort((a, b) => +new Date(b.startsAt) - +new Date(a.startsAt))
+  const eventIds = new Set(events.map((e) => e.id))
+  const registrations = (registrationsQuery.data ?? []).filter((r) => eventIds.has(r.eventId))
+  const rewards = rewardsQuery.data ?? []
+
+  const totalPointsIssued = registrations.filter((r) => r.status === 'attended').reduce((s, r) => s + (r.pointsAwarded ?? 0), 0)
+  const totalAttendees = registrations.length
 
   return (
     <div className="mx-auto max-w-5xl px-4 py-8 sm:px-6">
@@ -66,7 +76,7 @@ export function CompanyDashboardPage() {
           <div className="space-y-2.5">
             {events.map((e) => {
               const meta = CATEGORY_META[e.category]
-              const regs = repo.registrationsForEvent(e.id)
+              const regs = registrations.filter((r) => r.eventId === e.id)
               return (
                 <Link key={e.id} to={`/events/${e.id}`} className="flex items-center gap-3 rounded-2xl border border-ink-200 p-3 hover:border-brand-300">
                   <SafeImage src={e.imageUrl} alt="" className="h-14 w-14 shrink-0 rounded-xl object-cover" />
@@ -134,13 +144,23 @@ function AddRewardModal({ open, onClose, companyId }: { open: boolean; onClose: 
   const [costPoints, setCostPoints] = useState(50)
   const [stock, setStock] = useState(20)
   const [imageUrl, setImageUrl] = useState('https://images.unsplash.com/photo-1523275335684-37898b6baf30?q=80&w=800&auto=format&fit=crop')
+  const [error, setError] = useState('')
+  const createReward = useCreateReward()
 
   const submit = (e: FormEvent) => {
     e.preventDefault()
-    repo.createReward({ companyId, title, description, costPoints, stock, imageUrl, active: true })
-    setTitle('')
-    setDescription('')
-    onClose()
+    setError('')
+    createReward.mutate(
+      { companyId, title, description, costPoints, stock, imageUrl, active: true },
+      {
+        onSuccess: () => {
+          setTitle('')
+          setDescription('')
+          onClose()
+        },
+        onError: (err) => setError(err instanceof Error ? err.message : 'Something went wrong.'),
+      },
+    )
   }
 
   return (
@@ -168,8 +188,9 @@ function AddRewardModal({ open, onClose, companyId }: { open: boolean; onClose: 
           <Label htmlFor="r-image">Image URL</Label>
           <Input id="r-image" value={imageUrl} onChange={(e) => setImageUrl(e.target.value)} />
         </div>
-        <Button type="submit" className="w-full">
-          Publish reward
+        <FieldError>{error}</FieldError>
+        <Button type="submit" className="w-full" disabled={createReward.isPending}>
+          {createReward.isPending ? 'Publishing…' : 'Publish reward'}
         </Button>
       </form>
     </Modal>

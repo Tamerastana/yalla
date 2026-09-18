@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import {
   Award,
@@ -17,9 +17,12 @@ import {
 import { clsx } from 'clsx'
 import { CATEGORY_META, EMIRATES } from '../lib/categories'
 import { formatEventDate } from '../lib/format'
-import * as repo from '../lib/repo'
-import { useDbVersion } from '../lib/useDb'
 import { useAuth } from '../context/AuthContext'
+import { useEventsByHost, useEventsByIds } from '../hooks/useEvents'
+import { useUserRegistrations } from '../hooks/useRegistrations'
+import { useFriendships, useRespondToFriendRequest, useSendFriendRequest } from '../hooks/useFriendships'
+import { usePointsHistory, useRedemptions } from '../hooks/usePoints'
+import { useSearchProfiles, useUpdateProfile, useUsersByIds } from '../hooks/useProfiles'
 import { Avatar } from '../components/ui/Avatar'
 import { Badge } from '../components/ui/Badge'
 import { Button } from '../components/ui/Button'
@@ -27,30 +30,53 @@ import { Card } from '../components/ui/Card'
 import { EmptyState } from '../components/ui/EmptyState'
 import { Input, Label, Select, Textarea } from '../components/ui/Input'
 import { Modal } from '../components/ui/Modal'
+import { PageLoader } from '../components/ui/Spinner'
 import { SafeImage } from '../components/ui/SafeImage'
-import type { Emirate, User } from '../types'
+import type { Emirate, PointsEntry, SportEvent, User } from '../types'
 
 type Tab = 'upcoming' | 'history' | 'friends' | 'points'
 
 export function ProfilePage() {
-  useDbVersion()
   const { user } = useAuth()
   const [tab, setTab] = useState<Tab>('upcoming')
   const [editOpen, setEditOpen] = useState(false)
 
-  if (!user) return null
+  const registrationsQuery = useUserRegistrations(user?.id)
+  const registrations = registrationsQuery.data ?? []
+  const eventIds = useMemo(() => Array.from(new Set(registrations.map((r) => r.eventId))), [registrations])
+  const regEventsQuery = useEventsByIds(eventIds)
+  const regEvents = regEventsQuery.data ?? []
+  const eventById = useMemo(() => new Map(regEvents.map((e) => [e.id, e])), [regEvents])
 
-  const myRegs = repo.registrationsForUser(user.id)
+  const createdQuery = useEventsByHost(user?.id)
+  const created = createdQuery.data ?? []
+
+  const friendshipsQuery = useFriendships(user?.id)
+  const friendIds = useMemo(() => {
+    if (!user) return []
+    return (friendshipsQuery.data ?? []).filter((f) => f.status === 'accepted').map((f) => (f.requesterId === user.id ? f.addresseeId : f.requesterId))
+  }, [friendshipsQuery.data, user])
+
+  const pointsQuery = usePointsHistory(user?.id)
+  const totalPoints = useMemo(
+    () => (pointsQuery.data ?? []).reduce((s, p) => s + (p.kind === 'earned' ? p.points : -p.points), 0),
+    [pointsQuery.data],
+  )
+
+  if (!user) return null
+  if (registrationsQuery.isLoading || createdQuery.isLoading) return <PageLoader />
+
   const now = Date.now()
-  const upcoming = myRegs
-    .filter((r) => r.status !== 'cancelled' && repo.getEvent(r.eventId) && +new Date(repo.getEvent(r.eventId)!.startsAt) >= now)
-    .map((r) => repo.getEvent(r.eventId)!)
+  const upcoming = registrations
+    .filter((r) => r.status !== 'cancelled')
+    .map((r) => eventById.get(r.eventId))
+    .filter((e): e is SportEvent => !!e && +new Date(e.startsAt) >= now)
     .sort((a, b) => +new Date(a.startsAt) - +new Date(b.startsAt))
 
-  const attended = myRegs.filter((r) => r.status === 'attended').map((r) => repo.getEvent(r.eventId)).filter((e): e is NonNullable<typeof e> => !!e)
-  const created = repo.eventsByHost(user.id)
-  const friendIds = repo.friendIdsOf(user.id)
-  const totalPoints = repo.pointsBalancesByCompany(user.id).reduce((s, b) => s + b.balance, 0)
+  const attended = registrations
+    .filter((r) => r.status === 'attended')
+    .map((r) => eventById.get(r.eventId))
+    .filter((e): e is SportEvent => !!e)
 
   const tabs: { id: Tab; label: string; icon: React.ReactNode; count?: number }[] = [
     { id: 'upcoming', label: 'Upcoming', icon: <Calendar size={14} />, count: upcoming.length },
@@ -119,7 +145,7 @@ export function ProfilePage() {
         {tab === 'upcoming' && <UpcomingTab events={upcoming} />}
         {tab === 'history' && <HistoryTab attended={attended} created={created} />}
         {tab === 'friends' && <FriendsTab userId={user.id} />}
-        {tab === 'points' && <PointsTab userId={user.id} />}
+        {tab === 'points' && <PointsTab userId={user.id} points={pointsQuery.data ?? []} />}
       </div>
 
       <EditProfileModal open={editOpen} onClose={() => setEditOpen(false)} user={user} />
@@ -136,7 +162,7 @@ function Stat({ label, value }: { label: string; value: number }) {
   )
 }
 
-function UpcomingTab({ events }: { events: ReturnType<typeof repo.listEvents> }) {
+function UpcomingTab({ events }: { events: SportEvent[] }) {
   if (events.length === 0) {
     return (
       <EmptyState
@@ -160,7 +186,7 @@ function UpcomingTab({ events }: { events: ReturnType<typeof repo.listEvents> })
   )
 }
 
-function HistoryTab({ attended, created }: { attended: ReturnType<typeof repo.listEvents>; created: ReturnType<typeof repo.listEvents> }) {
+function HistoryTab({ attended, created }: { attended: SportEvent[]; created: SportEvent[] }) {
   return (
     <div className="space-y-6">
       <div>
@@ -191,7 +217,7 @@ function HistoryTab({ attended, created }: { attended: ReturnType<typeof repo.li
   )
 }
 
-function EventRow({ event, trailing }: { event: NonNullable<ReturnType<typeof repo.getEvent>>; trailing?: React.ReactNode }) {
+function EventRow({ event, trailing }: { event: SportEvent; trailing?: React.ReactNode }) {
   const meta = CATEGORY_META[event.category]
   return (
     <Link to={`/events/${event.id}`} className="flex items-center gap-3 rounded-2xl border border-ink-200 p-3 hover:border-brand-300">
@@ -209,21 +235,35 @@ function EventRow({ event, trailing }: { event: NonNullable<ReturnType<typeof re
 
 function FriendsTab({ userId }: { userId: string }) {
   const [query, setQuery] = useState('')
-  const friendIds = repo.friendIdsOf(userId)
-  const friends = friendIds.map((id) => repo.getUser(id)).filter((u): u is User => !!u)
-  const pending = repo.pendingRequestsFor(userId)
-  const results = query.trim() ? repo.searchUsers(query, userId) : []
+  const friendshipsQuery = useFriendships(userId)
+  const friendships = friendshipsQuery.data ?? []
+  const friendIds = friendships.filter((f) => f.status === 'accepted').map((f) => (f.requesterId === userId ? f.addresseeId : f.requesterId))
+  const pending = friendships.filter((f) => f.status === 'pending' && f.addresseeId === userId)
+  const pendingRequesterIds = pending.map((f) => f.requesterId)
+
+  const friendsProfilesQuery = useUsersByIds(friendIds)
+  const friends = friendsProfilesQuery.data ?? []
+  const requestersQuery = useUsersByIds(pendingRequesterIds)
+  const requesterById = new Map((requestersQuery.data ?? []).map((u) => [u.id, u]))
+
+  const resultsQuery = useSearchProfiles(query, userId)
+  const results = resultsQuery.data ?? []
+
+  const sendRequest = useSendFriendRequest(userId)
+  const respond = useRespondToFriendRequest(userId)
 
   return (
     <div className="space-y-6">
       <div>
         <Label>Find friends</Label>
-        <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search by name or email..." />
+        <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search by name..." />
         {results.length > 0 && (
           <div className="mt-2 space-y-1.5">
             {results.map((r) => {
               const already = friendIds.includes(r.id)
-              const pendingOut = repo.friendshipsForUser(userId).find((f) => (f.requesterId === userId && f.addresseeId === r.id) || (f.addresseeId === userId && f.requesterId === r.id))
+              const pendingOut = friendships.find(
+                (f) => (f.requesterId === userId && f.addresseeId === r.id) || (f.addresseeId === userId && f.requesterId === r.id),
+              )
               return (
                 <div key={r.id} className="flex items-center justify-between rounded-xl border border-ink-100 p-2.5">
                   <div className="flex items-center gap-2.5">
@@ -235,7 +275,7 @@ function FriendsTab({ userId }: { userId: string }) {
                   ) : pendingOut ? (
                     <Badge tone="neutral">Pending</Badge>
                   ) : (
-                    <Button size="sm" variant="outline" onClick={() => repo.sendFriendRequest(userId, r.id)}>
+                    <Button size="sm" variant="outline" disabled={sendRequest.isPending} onClick={() => sendRequest.mutate(r.id)}>
                       <UserPlus size={13} /> Add
                     </Button>
                   )}
@@ -251,7 +291,7 @@ function FriendsTab({ userId }: { userId: string }) {
           <h3 className="mb-2 text-sm font-bold text-ink-900">Friend requests</h3>
           <div className="space-y-2">
             {pending.map((f) => {
-              const requester = repo.getUser(f.requesterId)
+              const requester = requesterById.get(f.requesterId)
               if (!requester) return null
               return (
                 <div key={f.id} className="flex items-center justify-between rounded-xl border border-ink-100 p-2.5">
@@ -260,10 +300,10 @@ function FriendsTab({ userId }: { userId: string }) {
                     <span className="text-sm font-semibold text-ink-800">{requester.name}</span>
                   </div>
                   <div className="flex gap-1.5">
-                    <Button size="sm" onClick={() => repo.respondToFriendRequest(f.id, true)}>
+                    <Button size="sm" disabled={respond.isPending} onClick={() => respond.mutate({ friendshipId: f.id, accept: true })}>
                       <Check size={13} />
                     </Button>
-                    <Button size="sm" variant="outline" onClick={() => repo.respondToFriendRequest(f.id, false)}>
+                    <Button size="sm" variant="outline" disabled={respond.isPending} onClick={() => respond.mutate({ friendshipId: f.id, accept: false })}>
                       <X size={13} />
                     </Button>
                   </div>
@@ -293,10 +333,19 @@ function FriendsTab({ userId }: { userId: string }) {
   )
 }
 
-function PointsTab({ userId }: { userId: string }) {
-  const balances = repo.pointsBalancesByCompany(userId)
-  const history = repo.pointsHistoryForUser(userId)
-  const redemptions = repo.redemptionsForUser(userId)
+function PointsTab({ userId, points }: { userId: string; points: PointsEntry[] }) {
+  const companyIds = useMemo(() => Array.from(new Set(points.map((p) => p.companyId))), [points])
+  const companiesQuery = useUsersByIds(companyIds)
+  const companyById = new Map((companiesQuery.data ?? []).map((c) => [c.id, c]))
+
+  const balances = companyIds.map((companyId) => ({
+    companyId,
+    company: companyById.get(companyId),
+    balance: points.filter((p) => p.companyId === companyId).reduce((s, p) => s + (p.kind === 'earned' ? p.points : -p.points), 0),
+  }))
+
+  const redemptionsQuery = useRedemptions(userId)
+  const redemptions = redemptionsQuery.data ?? []
 
   return (
     <div className="space-y-6">
@@ -351,8 +400,8 @@ function PointsTab({ userId }: { userId: string }) {
       <div>
         <h3 className="mb-2 text-sm font-bold text-ink-900">Activity</h3>
         <div className="divide-y divide-ink-100 rounded-2xl border border-ink-100">
-          {history.length === 0 && <p className="p-3.5 text-sm text-ink-500">No activity yet.</p>}
-          {history.map((h) => (
+          {points.length === 0 && <p className="p-3.5 text-sm text-ink-500">No activity yet.</p>}
+          {points.map((h) => (
             <div key={h.id} className="flex items-center justify-between p-3.5">
               <div>
                 <p className="text-sm font-medium text-ink-700">{h.note}</p>
@@ -371,14 +420,23 @@ function PointsTab({ userId }: { userId: string }) {
 }
 
 function EditProfileModal({ open, onClose, user }: { open: boolean; onClose: () => void; user: User }) {
+  const { refreshUser } = useAuth()
   const [name, setName] = useState(user.name)
   const [bio, setBio] = useState(user.bio ?? '')
   const [city, setCity] = useState<Emirate | ''>(user.city ?? '')
   const [avatarUrl, setAvatarUrl] = useState(user.avatarUrl ?? '')
+  const updateProfile = useUpdateProfile(user.id)
 
   const save = () => {
-    repo.updateProfile(user.id, { name, bio, city: city || undefined, avatarUrl: avatarUrl || undefined })
-    onClose()
+    updateProfile.mutate(
+      { name, bio, city: city || undefined, avatarUrl: avatarUrl || undefined },
+      {
+        onSuccess: async () => {
+          await refreshUser()
+          onClose()
+        },
+      },
+    )
   }
 
   return (
@@ -407,8 +465,8 @@ function EditProfileModal({ open, onClose, user }: { open: boolean; onClose: () 
           <Label htmlFor="edit-avatar">Avatar URL</Label>
           <Input id="edit-avatar" value={avatarUrl} onChange={(e) => setAvatarUrl(e.target.value)} placeholder="https://..." />
         </div>
-        <Button className="w-full" onClick={save}>
-          Save changes
+        <Button className="w-full" disabled={updateProfile.isPending} onClick={save}>
+          {updateProfile.isPending ? 'Saving…' : 'Save changes'}
         </Button>
       </div>
     </Modal>

@@ -1,22 +1,39 @@
 import { useMemo, useState } from 'react'
 import { Award, Check, Gift, ShieldCheck } from 'lucide-react'
-import * as repo from '../lib/repo'
-import { useDbVersion } from '../lib/useDb'
 import { useAuth } from '../context/AuthContext'
+import { useActiveRewards } from '../hooks/useRewards'
+import { useCompanies, useUsersByIds } from '../hooks/useProfiles'
+import { usePointsHistory, useRedeemReward } from '../hooks/usePoints'
 import { Avatar } from '../components/ui/Avatar'
 import { Badge } from '../components/ui/Badge'
 import { Button } from '../components/ui/Button'
 import { Card } from '../components/ui/Card'
 import { EmptyState } from '../components/ui/EmptyState'
 import { Modal } from '../components/ui/Modal'
+import { PageLoader } from '../components/ui/Spinner'
 import { SafeImage } from '../components/ui/SafeImage'
 import type { Reward } from '../types'
 
 export function RewardsPage() {
-  useDbVersion()
   const { user } = useAuth()
-  const rewards = repo.activeRewards()
-  const companies = repo.allCompanies().filter((c) => c.company?.verified)
+  const rewardsQuery = useActiveRewards()
+  const rewards = rewardsQuery.data ?? []
+  const companiesQuery = useCompanies()
+  const companies = (companiesQuery.data ?? []).filter((c) => c.company?.verified)
+
+  const rewardCompanyIds = useMemo(() => Array.from(new Set(rewards.map((r) => r.companyId))), [rewards])
+  const rewardCompaniesQuery = useUsersByIds(rewardCompanyIds)
+  const companyById = new Map((rewardCompaniesQuery.data ?? []).map((c) => [c.id, c]))
+
+  const pointsQuery = usePointsHistory(user?.id)
+  const balanceByCompany = useMemo(() => {
+    const map = new Map<string, number>()
+    for (const p of pointsQuery.data ?? []) {
+      map.set(p.companyId, (map.get(p.companyId) ?? 0) + (p.kind === 'earned' ? p.points : -p.points))
+    }
+    return map
+  }, [pointsQuery.data])
+
   const [companyFilter, setCompanyFilter] = useState<string | 'all'>('all')
   const [selected, setSelected] = useState<Reward | null>(null)
   const [toast, setToast] = useState('')
@@ -47,13 +64,15 @@ export function RewardsPage() {
         ))}
       </div>
 
-      {filtered.length === 0 ? (
+      {rewardsQuery.isLoading ? (
+        <PageLoader />
+      ) : filtered.length === 0 ? (
         <EmptyState icon={<Gift size={20} />} title="No rewards available" description="Check back soon &mdash; companies add new rewards regularly." />
       ) : (
         <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3">
           {filtered.map((r) => {
-            const company = repo.getUser(r.companyId)
-            const balance = user ? repo.pointsBalance(user.id, r.companyId) : 0
+            const company = companyById.get(r.companyId)
+            const balance = balanceByCompany.get(r.companyId) ?? 0
             const canAfford = balance >= r.costPoints
             return (
               <Card key={r.id} className="flex flex-col overflow-hidden">
@@ -117,13 +136,15 @@ function FilterChip({ active, onClick, label }: { active: boolean; onClick: () =
 function RedeemModal({ reward, onClose, onRedeemed }: { reward: Reward | null; onClose: () => void; onRedeemed: (msg: string) => void }) {
   const { user } = useAuth()
   const [error, setError] = useState('')
+  const redeem = useRedeemReward(user?.id)
   if (!reward) return null
 
   const confirm = () => {
-    if (!user) return
-    const result = repo.redeemReward(user.id, reward.id)
-    if ('error' in result) return setError(result.error)
-    onRedeemed(`Redeemed! Your code is ${result.redemption.code}.`)
+    setError('')
+    redeem.mutate(reward.id, {
+      onSuccess: (result) => onRedeemed(`Redeemed! Your code is ${result.code}.`),
+      onError: (err) => setError(err instanceof Error ? err.message : 'Something went wrong.'),
+    })
   }
 
   return (
@@ -138,8 +159,8 @@ function RedeemModal({ reward, onClose, onRedeemed }: { reward: Reward | null; o
         </div>
         {error && <p className="rounded-lg bg-red-50 px-3 py-2 text-xs font-medium text-red-600">{error}</p>}
         <p className="text-xs text-ink-400">Points will be deducted immediately. This demo issues a redemption code instantly.</p>
-        <Button className="w-full" onClick={confirm}>
-          <Check size={16} /> Confirm redemption
+        <Button className="w-full" disabled={redeem.isPending} onClick={confirm}>
+          <Check size={16} /> {redeem.isPending ? 'Redeeming…' : 'Confirm redemption'}
         </Button>
       </div>
     </Modal>

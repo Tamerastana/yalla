@@ -45,7 +45,6 @@ export interface User {
   name: string
   email?: string
   phone?: string
-  passwordHash: string
   avatarUrl?: string
   role: Role
   bio?: string
@@ -137,10 +136,4 @@ export interface Redemption {
   redeemedAt: string
   code: string
   status: 'issued' | 'used'
-}
-
-export interface Session {
-  userId: string
-  token: string
-  createdAt: string
 }

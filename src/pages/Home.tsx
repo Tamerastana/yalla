@@ -5,22 +5,37 @@ import { DEFAULT_FILTERS, EventFilters, type Filters } from '../components/event
 import { EventCard } from '../components/events/EventCard'
 import { EmptyState } from '../components/ui/EmptyState'
 import { Button } from '../components/ui/Button'
+import { PageLoader } from '../components/ui/Spinner'
 import { CATEGORY_META } from '../lib/categories'
 import { distanceKm } from '../lib/geo'
 import { countByEvent, rankEvents } from '../lib/relevance'
-import * as repo from '../lib/repo'
-import { useDbVersion } from '../lib/useDb'
+import { useEvents } from '../hooks/useEvents'
+import { useAllRegistrations } from '../hooks/useRegistrations'
+import { useUsersByIds } from '../hooks/useProfiles'
 import { useGeo } from '../lib/useGeo'
 import { useAuth } from '../context/AuthContext'
+import type { User } from '../types'
 
 export function Home() {
-  const version = useDbVersion()
   const { user } = useAuth()
   const { point, status, request } = useGeo()
   const [filters, setFilters] = useState<Filters>(DEFAULT_FILTERS)
 
-  const upcoming = useMemo(() => repo.listEvents().filter((e) => e.status === 'upcoming'), [version])
-  const regCounts = useMemo(() => countByEvent(repo.allRegistrations()), [version])
+  const eventsQuery = useEvents()
+  const registrationsQuery = useAllRegistrations()
+  const events = eventsQuery.data ?? []
+  const registrations = registrationsQuery.data ?? []
+
+  const hostIds = useMemo(() => Array.from(new Set(events.map((e) => e.hostId))), [events])
+  const hostsQuery = useUsersByIds(hostIds)
+  const hostsById = useMemo(() => {
+    const map = new Map<string, User>()
+    for (const h of hostsQuery.data ?? []) map.set(h.id, h)
+    return map
+  }, [hostsQuery.data])
+
+  const upcoming = useMemo(() => events.filter((e) => e.status === 'upcoming'), [events])
+  const regCounts = useMemo(() => countByEvent(registrations), [registrations])
   const ranked = useMemo(() => rankEvents(upcoming, point, regCounts), [upcoming, point, regCounts])
 
   const featured = useMemo(() => ranked.filter((e) => e.isPromoted).slice(0, 6), [ranked])
@@ -85,64 +100,70 @@ export function Home() {
         </div>
       </section>
 
-      {featured.length > 0 && (
-        <section className="mx-auto max-w-6xl px-4 pt-8 sm:px-6">
-          <div className="mb-3 flex items-center gap-2">
-            <TrendingUp size={18} className="text-brand-500" />
-            <h2 className="text-lg font-extrabold text-ink-900">Trending &amp; promoted</h2>
-          </div>
-          <div className="flex gap-4 overflow-x-auto scrollbar-none pb-3">
-            {featured.map((e) => (
-              <div key={e.id} className="w-[280px] shrink-0 sm:w-[300px]">
-                <EventCard event={e} distanceKm={distanceKm(point, e.location.point)} registeredCount={regCounts[e.id] ?? 0} />
+      {eventsQuery.isLoading ? (
+        <PageLoader />
+      ) : (
+        <>
+          {featured.length > 0 && (
+            <section className="mx-auto max-w-6xl px-4 pt-8 sm:px-6">
+              <div className="mb-3 flex items-center gap-2">
+                <TrendingUp size={18} className="text-brand-500" />
+                <h2 className="text-lg font-extrabold text-ink-900">Trending &amp; promoted</h2>
               </div>
-            ))}
-          </div>
-        </section>
+              <div className="flex gap-4 overflow-x-auto scrollbar-none pb-3">
+                {featured.map((e) => (
+                  <div key={e.id} className="w-[280px] shrink-0 sm:w-[300px]">
+                    <EventCard event={e} host={hostsById.get(e.hostId)} distanceKm={distanceKm(point, e.location.point)} registeredCount={regCounts[e.id] ?? 0} />
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
+
+          <section id="feed" className="mx-auto max-w-6xl px-4 py-8 sm:px-6">
+            {status !== 'granted' && (
+              <button
+                onClick={request}
+                className="mb-4 flex w-full items-center gap-2 rounded-2xl border border-dashed border-brand-200 bg-brand-50/60 px-4 py-2.5 text-left text-xs font-semibold text-brand-700 hover:bg-brand-50"
+              >
+                {status === 'denied' ? <MapPinOff size={15} /> : <LocateFixed size={15} />}
+                {status === 'denied'
+                  ? 'Location blocked — showing events near Downtown Dubai. Enable location for accurate distances.'
+                  : 'Share your location to see events sorted by distance.'}
+              </button>
+            )}
+
+            <EventFilters filters={filters} onChange={setFilters} />
+
+            <div className="mt-6 flex items-center justify-between">
+              <p className="text-sm font-semibold text-ink-500">
+                {filtered.length} event{filtered.length === 1 ? '' : 's'} {user?.city ? `near ${user.city}` : ''}
+              </p>
+            </div>
+
+            {filtered.length === 0 ? (
+              <div className="mt-6">
+                <EmptyState
+                  icon={<Compass size={22} />}
+                  title="No events match your filters"
+                  description="Try widening your distance range, clearing categories, or checking back soon &mdash; new events are added daily."
+                  action={
+                    <Button variant="outline" onClick={() => setFilters(DEFAULT_FILTERS)}>
+                      Reset filters
+                    </Button>
+                  }
+                />
+              </div>
+            ) : (
+              <div className="mt-6 grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3">
+                {filtered.map((e) => (
+                  <EventCard key={e.id} event={e} host={hostsById.get(e.hostId)} distanceKm={distanceKm(point, e.location.point)} registeredCount={regCounts[e.id] ?? 0} />
+                ))}
+              </div>
+            )}
+          </section>
+        </>
       )}
-
-      <section id="feed" className="mx-auto max-w-6xl px-4 py-8 sm:px-6">
-        {status !== 'granted' && (
-          <button
-            onClick={request}
-            className="mb-4 flex w-full items-center gap-2 rounded-2xl border border-dashed border-brand-200 bg-brand-50/60 px-4 py-2.5 text-left text-xs font-semibold text-brand-700 hover:bg-brand-50"
-          >
-            {status === 'denied' ? <MapPinOff size={15} /> : <LocateFixed size={15} />}
-            {status === 'denied'
-              ? "Location blocked — showing events near Downtown Dubai. Enable location for accurate distances."
-              : 'Share your location to see events sorted by distance.'}
-          </button>
-        )}
-
-        <EventFilters filters={filters} onChange={setFilters} />
-
-        <div className="mt-6 flex items-center justify-between">
-          <p className="text-sm font-semibold text-ink-500">
-            {filtered.length} event{filtered.length === 1 ? '' : 's'} {user?.city ? `near ${user.city}` : ''}
-          </p>
-        </div>
-
-        {filtered.length === 0 ? (
-          <div className="mt-6">
-            <EmptyState
-              icon={<Compass size={22} />}
-              title="No events match your filters"
-              description="Try widening your distance range, clearing categories, or checking back soon &mdash; new events are added daily."
-              action={
-                <Button variant="outline" onClick={() => setFilters(DEFAULT_FILTERS)}>
-                  Reset filters
-                </Button>
-              }
-            />
-          </div>
-        ) : (
-          <div className="mt-6 grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3">
-            {filtered.map((e) => (
-              <EventCard key={e.id} event={e} distanceKm={distanceKm(point, e.location.point)} registeredCount={regCounts[e.id] ?? 0} />
-            ))}
-          </div>
-        )}
-      </section>
     </div>
   )
 }

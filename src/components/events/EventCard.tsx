@@ -7,20 +7,20 @@ import { formatEventTime, formatRelativeDay } from '../../lib/format'
 import { Badge } from '../ui/Badge'
 import { Avatar } from '../ui/Avatar'
 import { SafeImage } from '../ui/SafeImage'
-import * as repo from '../../lib/repo'
-import type { SportEvent } from '../../types'
+import type { SportEvent, User } from '../../types'
 
 export function EventCard({
   event,
+  host,
   distanceKm,
   registeredCount,
 }: {
   event: SportEvent
+  host?: User
   distanceKm?: number
   registeredCount: number
 }) {
   const meta = CATEGORY_META[event.category]
-  const host = repo.getUser(event.hostId)
   const spotsLeft = event.capacity > 0 ? event.capacity - registeredCount : undefined
   const isFull = spotsLeft !== undefined && spotsLeft <= 0
 

@@ -13,38 +13,61 @@ import {
 } from 'lucide-react'
 import { CATEGORY_META } from '../lib/categories'
 import { formatAED, formatEventDate, formatEventTime } from '../lib/format'
-import * as repo from '../lib/repo'
-import { useDbVersion } from '../lib/useDb'
 import { useAuth } from '../context/AuthContext'
+import { useEvent, usePromoteEvent } from '../hooks/useEvents'
+import { useEventRegistrations, useMarkAttended, useMyRegistration, useRegisterForEvent, useCancelRegistration } from '../hooks/useRegistrations'
+import { useFriendships } from '../hooks/useFriendships'
+import { useUsersByIds } from '../hooks/useProfiles'
 import { Avatar } from '../components/ui/Avatar'
 import { Badge } from '../components/ui/Badge'
 import { Button } from '../components/ui/Button'
 import { Card } from '../components/ui/Card'
 import { Modal } from '../components/ui/Modal'
+import { PageLoader } from '../components/ui/Spinner'
 import { SafeImage } from '../components/ui/SafeImage'
+import type { Registration } from '../types'
 
 export function EventDetails() {
   const { id } = useParams<{ id: string }>()
-  useDbVersion()
   const { user } = useAuth()
   const navigate = useNavigate()
   const [promoteOpen, setPromoteOpen] = useState(false)
   const [error, setError] = useState('')
   const [copied, setCopied] = useState(false)
 
-  const event = id ? repo.getEvent(id) : undefined
+  const eventQuery = useEvent(id)
+  const event = eventQuery.data
 
-  const host = event ? repo.getUser(event.hostId) : undefined
-  const registrations = event ? repo.registrationsForEvent(event.id) : []
-  const attendees = useMemo(
-    () => registrations.map((r) => repo.getUser(r.userId)).filter((u): u is NonNullable<typeof u> => !!u),
-    [registrations],
-  )
-  const friendsGoing = event && user ? repo.friendsGoingToEvent(user.id, event.id) : []
-  const myRegistration = event && user ? repo.isRegistered(user.id, event.id) : undefined
+  const registrationsQuery = useEventRegistrations(event?.id)
+  const registrations = registrationsQuery.data ?? []
+  const attendeeIds = useMemo(() => registrations.map((r) => r.userId), [registrations])
+  const attendeesQuery = useUsersByIds(attendeeIds)
+  const attendees = attendeesQuery.data ?? []
+
+  const friendshipsQuery = useFriendships(user?.id)
+  const friendIds = useMemo(() => {
+    if (!user) return new Set<string>()
+    return new Set(
+      (friendshipsQuery.data ?? [])
+        .filter((f) => f.status === 'accepted')
+        .map((f) => (f.requesterId === user.id ? f.addresseeId : f.requesterId)),
+    )
+  }, [friendshipsQuery.data, user])
+  const friendsGoing = attendees.filter((a) => friendIds.has(a.id))
+
+  const myRegistrationQuery = useMyRegistration(user?.id, event?.id)
+  const myRegistration = myRegistrationQuery.data
+
+  const hostQuery = useUsersByIds(event ? [event.hostId] : [])
+  const host = hostQuery.data?.[0]
+
+  const registerMutation = useRegisterForEvent()
+  const cancelMutation = useCancelRegistration()
+
   const isHost = !!user && !!event && user.id === event.hostId
 
   if (!id) return <Navigate to="/" replace />
+  if (eventQuery.isLoading) return <PageLoader />
   if (!event) {
     return (
       <div className="mx-auto max-w-2xl px-6 py-20 text-center">
@@ -64,12 +87,15 @@ export function EventDetails() {
 
   const handleRegister = () => {
     if (!user) return navigate('/login', { state: { from: `/events/${event.id}` } })
-    const result = repo.registerForEvent(user.id, event.id)
-    if ('error' in result) setError(result.error)
+    setError('')
+    registerMutation.mutate(
+      { userId: user.id, eventId: event.id },
+      { onError: (err) => setError(err instanceof Error ? err.message : 'Something went wrong.') },
+    )
   }
 
   const handleCancel = () => {
-    if (myRegistration) repo.cancelRegistration(myRegistration.id)
+    if (myRegistration) cancelMutation.mutate(myRegistration.id)
   }
 
   const handleShare = async () => {
@@ -181,7 +207,7 @@ export function EventDetails() {
             )}
           </div>
 
-          {isHost && <HostAttendancePanel eventId={event.id} />}
+          {isHost && <HostAttendancePanel registrations={registrations} attendees={attendees} />}
         </div>
 
         <div className="space-y-4">
@@ -206,13 +232,13 @@ export function EventDetails() {
                 <div className="flex items-center justify-center gap-1.5 rounded-xl bg-emerald-50 py-2.5 text-sm font-semibold text-emerald-700">
                   <Check size={16} /> You're registered
                 </div>
-                <Button variant="outline" className="w-full" onClick={handleCancel}>
+                <Button variant="outline" className="w-full" disabled={cancelMutation.isPending} onClick={handleCancel}>
                   Cancel registration
                 </Button>
               </div>
             ) : (
-              <Button className="w-full" size="lg" disabled={spotsLeft === 0} onClick={handleRegister}>
-                {spotsLeft === 0 ? 'Event full' : 'Register now'}
+              <Button className="w-full" size="lg" disabled={spotsLeft === 0 || registerMutation.isPending} onClick={handleRegister}>
+                {spotsLeft === 0 ? 'Event full' : registerMutation.isPending ? 'Registering…' : 'Register now'}
               </Button>
             )}
 
@@ -257,12 +283,15 @@ function InfoItem({ icon, label, value }: { icon: React.ReactNode; label: string
   )
 }
 
-function HostAttendancePanel({ eventId }: { eventId: string }) {
-  useDbVersion()
-  const registrations = repo.registrationsForEvent(eventId)
-  const event = repo.getEvent(eventId)
-  if (!event) return null
-  const canAward = event.type === 'official' && event.pointsPerAttendee > 0
+function HostAttendancePanel({
+  registrations,
+  attendees,
+}: {
+  registrations: Registration[]
+  attendees: { id: string; name: string; avatarUrl?: string }[]
+}) {
+  const markAttended = useMarkAttended()
+  const attendeeById = new Map(attendees.map((a) => [a.id, a]))
 
   return (
     <div>
@@ -270,7 +299,7 @@ function HostAttendancePanel({ eventId }: { eventId: string }) {
       <Card className="divide-y divide-ink-100">
         {registrations.length === 0 && <p className="p-4 text-sm text-ink-500">No registrations yet.</p>}
         {registrations.map((r) => {
-          const attendee = repo.getUser(r.userId)
+          const attendee = attendeeById.get(r.userId)
           if (!attendee) return null
           return (
             <div key={r.id} className="flex items-center justify-between gap-3 p-3.5">
@@ -280,10 +309,15 @@ function HostAttendancePanel({ eventId }: { eventId: string }) {
               </div>
               {r.status === 'attended' ? (
                 <Badge tone="success">
-                  <Check size={12} /> Attended{canAward ? ` · +${r.pointsAwarded} pts` : ''}
+                  <Check size={12} /> Attended{r.pointsAwarded ? ` · +${r.pointsAwarded} pts` : ''}
                 </Badge>
               ) : (
-                <Button size="sm" variant="outline" onClick={() => repo.markAttended(r.id)}>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={markAttended.isPending}
+                  onClick={() => markAttended.mutate({ registrationId: r.id, userId: r.userId })}
+                >
                   Mark attended
                 </Button>
               )}
@@ -296,6 +330,7 @@ function HostAttendancePanel({ eventId }: { eventId: string }) {
 }
 
 function PromoteModal({ open, onClose, eventId }: { open: boolean; onClose: () => void; eventId: string }) {
+  const promote = usePromoteEvent(eventId)
   const tiers: { tier: 1 | 2 | 3; label: string; price: number; blurb: string }[] = [
     { tier: 1, label: 'Boost', price: 49, blurb: '7 days · modest priority lift' },
     { tier: 2, label: 'Spotlight', price: 99, blurb: '7 days · strong priority + featured rail' },
@@ -311,10 +346,8 @@ function PromoteModal({ open, onClose, eventId }: { open: boolean; onClose: () =
         {tiers.map((t) => (
           <button
             key={t.tier}
-            onClick={() => {
-              repo.promoteEvent(eventId, t.tier)
-              onClose()
-            }}
+            disabled={promote.isPending}
+            onClick={() => promote.mutate({ tier: t.tier }, { onSuccess: onClose })}
             className="flex w-full items-center justify-between rounded-2xl border border-ink-200 p-4 text-left hover:border-brand-400"
           >
             <div>
