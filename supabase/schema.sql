@@ -208,13 +208,21 @@ create trigger on_auth_user_created
   for each row execute function handle_new_user();
 
 -- ---------------------------------------------------------------------------
--- Guard: only a super_admin can change role / company_verified, even via a
--- direct table update (defense in depth on top of the RPCs below).
+-- Guard: only a super_admin can change role / company_verified through the
+-- app (PostgREST, where auth.uid() reflects the caller's JWT), even via a
+-- direct table update — defense in depth on top of the RPCs below.
+--
+-- auth.uid() is NULL for anything run outside a user request — the
+-- Supabase SQL Editor, a migration, psql with the postgres role. That's the
+-- project owner's own trusted connection (running SQL there already implies
+-- full database access), so it intentionally skips this guard rather than
+-- being locked out of bootstrapping the very first admin account.
 -- ---------------------------------------------------------------------------
 create or replace function protect_profile_privileged_columns()
 returns trigger as $$
 begin
-  if not exists (select 1 from profiles where id = auth.uid() and role = 'super_admin') then
+  if auth.uid() is not null
+     and not exists (select 1 from profiles where id = auth.uid() and role = 'super_admin') then
     new.role := old.role;
     new.company_verified := old.company_verified;
     new.company_verified_at := old.company_verified_at;
