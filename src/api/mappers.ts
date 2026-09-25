@@ -42,6 +42,7 @@ export function mapProfile(row: Record<string, unknown>): User {
             verified: Boolean(row.company_verified),
             verifiedAt: (row.company_verified_at as string) ?? undefined,
             verifiedBy: (row.company_verified_by as string) ?? undefined,
+            active: row.is_active === undefined ? true : Boolean(row.is_active),
           }
         : undefined,
   }

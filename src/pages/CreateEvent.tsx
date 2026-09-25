@@ -1,13 +1,14 @@
-import { useState, type FormEvent } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useEffect, useState, type FormEvent } from 'react'
+import { useNavigate, useParams } from 'react-router-dom'
 import { addDays, format } from 'date-fns'
 import { Award, Info, ShieldCheck } from 'lucide-react'
 import { CATEGORY_LIST, CATEGORY_META, EMIRATES } from '../lib/categories'
 import { CATEGORY_STOCK_IMAGES, PRESET_VENUES } from '../lib/venues'
-import { useCreateEvent } from '../hooks/useEvents'
+import { useCreateEvent, useDeleteEvent, useEvent, useUpdateEvent } from '../hooks/useEvents'
 import { useAuth } from '../context/AuthContext'
 import { Button } from '../components/ui/Button'
 import { Card } from '../components/ui/Card'
+import { PageLoader } from '../components/ui/Spinner'
 import { FieldError, Input, Label, Select, Textarea } from '../components/ui/Input'
 import type { Emirate, EventCategory } from '../types'
 
@@ -16,8 +17,13 @@ function toLocalInputValue(d: Date) {
 }
 
 export function CreateEventPage() {
+  const { id } = useParams<{ id: string }>()
+  const isEditing = !!id
   const { user } = useAuth()
   const navigate = useNavigate()
+
+  const existingQuery = useEvent(id)
+  const existing = existingQuery.data
 
   const canHostOfficial = user?.role === 'company' && !!user.company?.verified
 
@@ -32,16 +38,58 @@ export function CreateEventPage() {
   const [customEmirate, setCustomEmirate] = useState<Emirate>('Dubai')
   const [capacity, setCapacity] = useState(20)
   const [priceAED, setPriceAED] = useState(0)
+  const [imageUrl, setImageUrl] = useState('')
   const [requestOfficial, setRequestOfficial] = useState(canHostOfficial)
   const [pointsPerAttendee, setPointsPerAttendee] = useState(30)
   const [error, setError] = useState('')
+  const [prefilled, setPrefilled] = useState(false)
+
   const createEvent = useCreateEvent()
+  const updateEvent = useUpdateEvent(id ?? '')
+  const deleteEvent = useDeleteEvent()
+
+  const isAdmin = user?.role === 'super_admin'
+  const canEditThis = !!existing && !!user && (user.id === existing.hostId || isAdmin)
+
+  useEffect(() => {
+    if (!existing || prefilled) return
+    setTitle(existing.title)
+    setDescription(existing.description)
+    setCategory(existing.category)
+    setStartsAt(toLocalInputValue(new Date(existing.startsAt)))
+    setDurationHours(Math.max(0.5, (+new Date(existing.endsAt) - +new Date(existing.startsAt)) / 3_600_000))
+    const presetIdx = PRESET_VENUES.findIndex((v) => v.name === existing.location.name)
+    if (presetIdx >= 0) {
+      setVenueIdx(presetIdx)
+    } else {
+      setVenueIdx(PRESET_VENUES.length - 1)
+      setCustomName(existing.location.name)
+      setCustomAddress(existing.location.address)
+      setCustomEmirate(existing.location.emirate)
+    }
+    setCapacity(existing.capacity)
+    setPriceAED(existing.priceAED)
+    setImageUrl(existing.imageUrl)
+    setRequestOfficial(existing.type === 'official')
+    setPointsPerAttendee(existing.pointsPerAttendee || 30)
+    setPrefilled(true)
+  }, [existing, prefilled])
 
   // RequireAuth (see App.tsx routing) guarantees a user here.
   if (!user) return null
+  if (isEditing && existingQuery.isLoading) return <PageLoader />
+  if (isEditing && (!existing || !canEditThis)) {
+    return (
+      <div className="mx-auto max-w-lg px-6 py-20 text-center">
+        <p className="text-lg font-bold text-ink-900">Can't edit this event</p>
+        <p className="mt-1 text-sm text-ink-500">It doesn't exist, or you're not its host or a Yalla admin.</p>
+      </div>
+    )
+  }
 
   const venue = PRESET_VENUES[venueIdx]
   const isCustomVenue = venue.name === 'Other / custom location'
+  const effectiveImageUrl = imageUrl || CATEGORY_STOCK_IMAGES[category]
 
   const submit = (e: FormEvent) => {
     e.preventDefault()
@@ -53,32 +101,62 @@ export function CreateEventPage() {
       ? { name: customName || 'Custom venue', address: customAddress, emirate: customEmirate, point: venue.point }
       : { name: venue.name, address: venue.address, emirate: venue.emirate, point: venue.point }
 
-    createEvent.mutate(
-      {
-        hostId: user.id,
-        title,
-        description,
-        category,
-        startsAt: start.toISOString(),
-        endsAt: end.toISOString(),
-        location,
-        capacity,
-        priceAED,
-        pointsPerAttendee,
-        imageUrl: CATEGORY_STOCK_IMAGES[category],
-        requestOfficial,
-      },
-      {
+    const payload = {
+      title,
+      description,
+      category,
+      startsAt: start.toISOString(),
+      endsAt: end.toISOString(),
+      location,
+      capacity,
+      priceAED,
+      pointsPerAttendee,
+      imageUrl: effectiveImageUrl,
+      requestOfficial,
+    }
+
+    if (isEditing) {
+      updateEvent.mutate(payload, {
         onSuccess: (event) => navigate(`/events/${event.id}`),
         onError: (err) => setError(err instanceof Error ? err.message : 'Something went wrong.'),
-      },
-    )
+      })
+    } else {
+      createEvent.mutate(
+        { hostId: user.id, ...payload },
+        {
+          onSuccess: (event) => navigate(`/events/${event.id}`),
+          onError: (err) => setError(err instanceof Error ? err.message : 'Something went wrong.'),
+        },
+      )
+    }
   }
+
+  const handleDelete = () => {
+    if (!id) return
+    if (!window.confirm('Delete this event permanently? This cannot be undone.')) return
+    deleteEvent.mutate(id, {
+      onSuccess: () => navigate('/profile'),
+      onError: (err) => setError(err instanceof Error ? err.message : 'Something went wrong.'),
+    })
+  }
+
+  const isPending = createEvent.isPending || updateEvent.isPending
 
   return (
     <div className="mx-auto max-w-2xl px-4 py-8 sm:px-6">
-      <h1 className="text-2xl font-extrabold text-ink-900">Host an event</h1>
-      <p className="mt-1 text-sm text-ink-500">Fill in the details below &mdash; it takes less than a minute.</p>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-extrabold text-ink-900">{isEditing ? 'Edit event' : 'Host an event'}</h1>
+          <p className="mt-1 text-sm text-ink-500">
+            {isEditing ? 'Update the details below.' : "Fill in the details below — it takes less than a minute."}
+          </p>
+        </div>
+        {isEditing && (
+          <Button type="button" variant="danger" size="sm" disabled={deleteEvent.isPending} onClick={handleDelete}>
+            {deleteEvent.isPending ? 'Deleting…' : 'Delete event'}
+          </Button>
+        )}
+      </div>
 
       <form onSubmit={submit} className="mt-6 space-y-5">
         <Card className="space-y-4 p-5">
@@ -108,6 +186,13 @@ export function CreateEventPage() {
                   </button>
                 )
               })}
+            </div>
+          </div>
+          <div>
+            <Label htmlFor="imageUrl">Cover image URL</Label>
+            <div className="flex items-center gap-3">
+              <img src={effectiveImageUrl} alt="" className="h-14 w-14 shrink-0 rounded-xl object-cover" />
+              <Input id="imageUrl" value={imageUrl} onChange={(e) => setImageUrl(e.target.value)} placeholder="Leave blank to use the default for this category" />
             </div>
           </div>
         </Card>
@@ -177,7 +262,7 @@ export function CreateEventPage() {
             <ShieldCheck size={18} className="mt-0.5 shrink-0 text-brand-500" />
             <div className="flex-1">
               <p className="text-sm font-bold text-ink-900">Official, points-earning event</p>
-              {canHostOfficial ? (
+              {canHostOfficial || isAdmin ? (
                 <label className="mt-1 flex items-center gap-2 text-sm text-ink-600">
                   <input type="checkbox" checked={requestOfficial} onChange={(e) => setRequestOfficial(e.target.checked)} className="h-4 w-4 rounded accent-brand-500" />
                   Award loyalty points to attendees
@@ -193,7 +278,7 @@ export function CreateEventPage() {
             </div>
           </div>
 
-          {canHostOfficial && requestOfficial && (
+          {(canHostOfficial || isAdmin) && requestOfficial && (
             <div className="ml-8">
               <Label htmlFor="points" className="flex items-center gap-1">
                 <Award size={13} /> Points per attendee
@@ -205,8 +290,8 @@ export function CreateEventPage() {
         </Card>
 
         <FieldError>{error}</FieldError>
-        <Button type="submit" size="lg" className="w-full" disabled={createEvent.isPending}>
-          {createEvent.isPending ? 'Publishing…' : 'Publish event'}
+        <Button type="submit" size="lg" className="w-full" disabled={isPending}>
+          {isPending ? (isEditing ? 'Saving…' : 'Publishing…') : isEditing ? 'Save changes' : 'Publish event'}
         </Button>
       </form>
     </div>

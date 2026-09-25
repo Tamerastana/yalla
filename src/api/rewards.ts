@@ -31,3 +31,27 @@ export async function createReward(input: Omit<Reward, 'id'>): Promise<Reward> {
   if (error) throw new Error(error.message)
   return mapReward(data)
 }
+
+export type UpdateRewardInput = Partial<Omit<Reward, 'id' | 'companyId'>>
+
+/** RLS allows this for the reward's own company or a super_admin. */
+export async function updateReward(rewardId: string, input: UpdateRewardInput): Promise<Reward> {
+  const row: Record<string, unknown> = {}
+  if (input.title !== undefined) row.title = input.title
+  if (input.description !== undefined) row.description = input.description
+  if (input.costPoints !== undefined) row.cost_points = input.costPoints
+  if (input.imageUrl !== undefined) row.image_url = input.imageUrl
+  if (input.stock !== undefined) row.stock = input.stock
+  if (input.active !== undefined) row.active = input.active
+
+  const { data, error } = await supabase.from('rewards').update(row).eq('id', rewardId).select('*').maybeSingle()
+  if (error) throw new Error(error.message)
+  if (!data) throw new Error("You don't have permission to edit this reward.")
+  return mapReward(data)
+}
+
+export async function deleteReward(rewardId: string): Promise<void> {
+  const { data, error } = await supabase.from('rewards').delete().eq('id', rewardId).select('id').maybeSingle()
+  if (error) throw new Error(error.message)
+  if (!data) throw new Error("You don't have permission to delete this reward.")
+}

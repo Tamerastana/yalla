@@ -6,15 +6,17 @@ import {
   Check,
   Clock,
   MapPin,
+  Pencil,
   Share2,
   ShieldCheck,
   Sparkles,
+  Trash2,
   Users,
 } from 'lucide-react'
 import { CATEGORY_META } from '../lib/categories'
 import { formatAED, formatEventDate, formatEventTime } from '../lib/format'
 import { useAuth } from '../context/AuthContext'
-import { useEvent, usePromoteEvent } from '../hooks/useEvents'
+import { useDeleteEvent, useEvent, usePromoteEvent } from '../hooks/useEvents'
 import { useEventRegistrations, useMarkAttended, useMyRegistration, useRegisterForEvent, useCancelRegistration } from '../hooks/useRegistrations'
 import { useFriendships } from '../hooks/useFriendships'
 import { useUsersByIds } from '../hooks/useProfiles'
@@ -63,8 +65,11 @@ export function EventDetails() {
 
   const registerMutation = useRegisterForEvent()
   const cancelMutation = useCancelRegistration()
+  const deleteEvent = useDeleteEvent()
 
   const isHost = !!user && !!event && user.id === event.hostId
+  const isAdmin = user?.role === 'super_admin'
+  const canManage = isHost || isAdmin
 
   if (!id) return <Navigate to="/" replace />
   if (eventQuery.isLoading) return <PageLoader />
@@ -106,6 +111,14 @@ export function EventDetails() {
     } catch {
       // clipboard unavailable — no-op
     }
+  }
+
+  const handleDelete = () => {
+    if (!window.confirm('Delete this event permanently? This cannot be undone.')) return
+    deleteEvent.mutate(event.id, {
+      onSuccess: () => navigate('/'),
+      onError: (err) => setError(err instanceof Error ? err.message : 'Something went wrong.'),
+    })
   }
 
   return (
@@ -153,22 +166,31 @@ export function EventDetails() {
 
           <div>
             <h2 className="mb-2 font-bold text-ink-900">Location</h2>
-            <a
-              href={mapsUrl}
-              target="_blank"
-              rel="noreferrer"
-              className="flex items-center justify-between rounded-2xl border border-ink-200 p-4 hover:border-brand-300"
-            >
-              <div>
-                <p className="text-sm font-semibold text-ink-800">{event.location.name}</p>
-                <p className="text-xs text-ink-500">
-                  {event.location.address}, {event.location.emirate}
-                </p>
-              </div>
-              <span className="flex items-center gap-1 text-xs font-semibold text-brand-600">
-                <MapPin size={14} /> View on map
-              </span>
-            </a>
+            <div className="overflow-hidden rounded-2xl border border-ink-200">
+              <iframe
+                title="Event location"
+                src={`https://maps.google.com/maps?q=${event.location.point.lat},${event.location.point.lng}&z=15&output=embed`}
+                className="h-56 w-full sm:h-72"
+                loading="lazy"
+                referrerPolicy="no-referrer-when-downgrade"
+              />
+              <a
+                href={mapsUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="flex items-center justify-between border-t border-ink-200 p-4 hover:bg-ink-50"
+              >
+                <div>
+                  <p className="text-sm font-semibold text-ink-800">{event.location.name}</p>
+                  <p className="text-xs text-ink-500">
+                    {event.location.address}, {event.location.emirate}
+                  </p>
+                </div>
+                <span className="flex shrink-0 items-center gap-1 text-xs font-semibold text-brand-600">
+                  <MapPin size={14} /> Open in Google Maps
+                </span>
+              </a>
+            </div>
           </div>
 
           {friendsGoing.length > 0 && (
@@ -257,10 +279,21 @@ export function EventDetails() {
               </div>
             </div>
 
-            {isHost && !isPast && (
+            {canManage && !isPast && (
               <Button variant="secondary" className="w-full" onClick={() => setPromoteOpen(true)}>
                 <Sparkles size={15} /> {event.isPromoted ? 'Boost promotion' : 'Promote this event'}
               </Button>
+            )}
+
+            {canManage && (
+              <div className="flex gap-2 border-t border-ink-100 pt-4">
+                <Button variant="outline" className="flex-1" onClick={() => navigate(`/events/${event.id}/edit`)}>
+                  <Pencil size={14} /> Edit
+                </Button>
+                <Button variant="danger" className="flex-1" disabled={deleteEvent.isPending} onClick={handleDelete}>
+                  <Trash2 size={14} /> {deleteEvent.isPending ? 'Deleting…' : 'Delete'}
+                </Button>
+              </div>
             )}
           </Card>
         </div>

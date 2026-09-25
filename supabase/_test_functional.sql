@@ -150,4 +150,97 @@ end $$;
 update profiles set role = 'super_admin' where id = '00000000-0000-0000-0000-000000000003';
 select (role = 'user') as privilege_escalation_blocked from profiles where id = '00000000-0000-0000-0000-000000000003';
 
+\echo '=== redeem_code: fulfil a reward at the point of pickup ==='
+-- Stash the code in a session-local custom GUC (survives SET ROLE / JWT
+-- changes within this one connection) so the "wrong company" step below can
+-- use it as a literal without needing to (and being unable to, under RLS)
+-- SELECT it back out under someone else's identity.
+select set_config('test.redeem_code', (select code from redemptions where user_id = '00000000-0000-0000-0000-000000000003'), false);
+
+reset request.jwt.claim.sub;
+set request.jwt.claim.sub = '00000000-0000-0000-0000-000000000004';
+\echo '--- a different company TRIES to redeem it (must raise "not issued by your company") ---'
+do $$
+begin
+  perform redeem_code(current_setting('test.redeem_code'));
+  raise exception 'TEST FAILED: wrong company redeemed a code that is not theirs';
+exception when others then
+  if sqlerrm like '%not issued by your company%' then
+    raise notice 'guard fired as expected: %', sqlerrm;
+  else
+    raise;
+  end if;
+end $$;
+
+reset request.jwt.claim.sub;
+set request.jwt.claim.sub = '00000000-0000-0000-0000-000000000002';
+\echo '--- the actual issuing company redeems it (must succeed, status -> used) ---'
+select status from redeem_code(current_setting('test.redeem_code'));
+
+\echo '--- same company tries to redeem the SAME code again (must raise "already been used") ---'
+do $$
+begin
+  perform redeem_code(current_setting('test.redeem_code'));
+  raise exception 'TEST FAILED: the same code was redeemed twice';
+exception when others then
+  if sqlerrm like '%already been used%' then
+    raise notice 'guard fired as expected: %', sqlerrm;
+  else
+    raise;
+  end if;
+end $$;
+
+\echo '=== set_company_active: admin-only soft removal ==='
+reset request.jwt.claim.sub;
+set request.jwt.claim.sub = '00000000-0000-0000-0000-000000000002';
+\echo '--- the company itself TRIES to deactivate itself (must raise) ---'
+do $$
+begin
+  perform set_company_active('00000000-0000-0000-0000-000000000002', false);
+  raise exception 'TEST FAILED: a non-admin deactivated a company';
+exception when others then
+  if sqlerrm like '%Yalla admin%' then
+    raise notice 'guard fired as expected: %', sqlerrm;
+  else
+    raise;
+  end if;
+end $$;
+
+reset request.jwt.claim.sub;
+set request.jwt.claim.sub = '00000000-0000-0000-0000-000000000001';
+\echo '--- the admin deactivates it ---'
+select set_company_active('00000000-0000-0000-0000-000000000002', false);
+
+reset request.jwt.claim.sub;
+set request.jwt.claim.sub = '00000000-0000-0000-0000-000000000002';
+\echo '--- the now-deactivated company TRIES to create a new official event (must be downgraded to community) ---'
+insert into events (host_id, title, description, category, type, starts_at, ends_at, location_name, address, emirate, lat, lng, capacity, price_aed, points_per_attendee, image_url)
+values ('00000000-0000-0000-0000-000000000002', 'Post-Deactivation Event', 'desc', 'padel', 'official', now() + interval '1 day', now() + interval '2 day', 'Club', 'Addr', 'Dubai', 25.2, 55.3, 5, 0, 20, '');
+
+select (type = 'community' and points_per_attendee = 0) as deactivated_company_blocked from events where title = 'Post-Deactivation Event';
+
+\echo '=== event/reward edit & delete: own, blocked-for-others, admin-override ==='
+\echo '--- the host edits their own event ---'
+update events set title = 'Real Official (edited)' where title = 'Real Official';
+
+reset request.jwt.claim.sub;
+set request.jwt.claim.sub = '00000000-0000-0000-0000-000000000003';
+\echo '--- a different user TRIES to edit it (RLS silently affects 0 rows, no error) ---'
+update events set title = 'Hijacked!' where title = 'Real Official (edited)';
+select (count(*) = 0) as edit_by_stranger_blocked from events where title = 'Hijacked!';
+
+reset request.jwt.claim.sub;
+set request.jwt.claim.sub = '00000000-0000-0000-0000-000000000001';
+\echo '--- the admin edits AND deletes events they do not host (must succeed) ---'
+update events set title = 'Edited by admin' where title = 'Real Official (edited)';
+select (count(*) = 1) as admin_edit_ok from events where title = 'Edited by admin';
+delete from events where title = 'Casual Kickabout';
+select (count(*) = 0) as admin_delete_ok from events where title = 'Casual Kickabout';
+
+reset request.jwt.claim.sub;
+set request.jwt.claim.sub = '00000000-0000-0000-0000-000000000002';
+\echo '--- the host deletes their own reward ---'
+delete from rewards where title = 'Free Court Hour';
+select (count(*) = 0) as own_reward_delete_ok from rewards where title = 'Free Court Hour';
+
 \echo '--- ALL CHECKS COMPLETE ---'

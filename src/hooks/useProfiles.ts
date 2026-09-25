@@ -54,3 +54,15 @@ export function useVerifyCompany() {
     },
   })
 }
+
+export function useSetCompanyActive() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ companyId, active }: { companyId: string; active: boolean }) =>
+      profilesApi.setCompanyActive(companyId, active),
+    onSuccess: (_data, { companyId }) => {
+      queryClient.invalidateQueries({ queryKey: ['profiles', 'companies'] })
+      queryClient.invalidateQueries({ queryKey: ['profiles', companyId] })
+    },
+  })
+}

@@ -30,6 +30,14 @@ function App() {
           }
         />
         <Route
+          path="events/:id/edit"
+          element={
+            <RequireAuth>
+              <CreateEventPage />
+            </RequireAuth>
+          }
+        />
+        <Route
           path="profile"
           element={
             <RequireAuth>

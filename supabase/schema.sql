@@ -3,11 +3,6 @@
 -- Safe to re-run: it drops and recreates everything it owns.
 
 -- ---------------------------------------------------------------------------
--- Extensions
--- ---------------------------------------------------------------------------
-create extension if not exists "pgcrypto";
-
--- ---------------------------------------------------------------------------
 -- Enums
 -- ---------------------------------------------------------------------------
 do $$ begin
@@ -67,6 +62,8 @@ create table if not exists profiles (
   company_verified boolean not null default false,
   company_verified_at timestamptz,
   company_verified_by uuid references profiles(id),
+  /** Admin "removed" a company without destroying its history — see set_company_active(). */
+  is_active boolean not null default true,
   created_at timestamptz not null default now()
 );
 
@@ -227,6 +224,7 @@ begin
     new.company_verified := old.company_verified;
     new.company_verified_at := old.company_verified_at;
     new.company_verified_by := old.company_verified_by;
+    new.is_active := old.is_active;
   end if;
   return new;
 end;
@@ -247,9 +245,10 @@ returns trigger as $$
 declare
   v_role user_role;
   v_verified boolean;
+  v_active boolean;
 begin
-  select role, company_verified into v_role, v_verified from profiles where id = new.host_id;
-  if new.type = 'official' and not (v_role = 'company' and coalesce(v_verified, false)) then
+  select role, company_verified, is_active into v_role, v_verified, v_active from profiles where id = new.host_id;
+  if new.type = 'official' and not (v_role = 'company' and coalesce(v_verified, false) and coalesce(v_active, true)) then
     new.type := 'community';
   end if;
   if new.type = 'community' then
@@ -361,7 +360,11 @@ begin
     raise exception 'Not enough points for this reward';
   end if;
 
-  v_code := 'YALLA-' || upper(substr(encode(gen_random_bytes(5), 'hex'), 1, 8));
+  -- md5()/random() are built into core Postgres, unlike gen_random_bytes()
+  -- (pgcrypto), which Supabase installs outside the public schema — this
+  -- function's search_path is pinned to public, so pgcrypto calls would
+  -- fail here with "function does not exist".
+  v_code := 'YALLA-' || upper(substr(md5(random()::text || clock_timestamp()::text), 1, 8));
 
   insert into points_entries (user_id, company_id, points, kind, note)
   values (auth.uid(), v_company_id, v_cost, 'redeemed', 'Redeemed reward');
@@ -392,6 +395,63 @@ end;
 $$ language plpgsql security definer set search_path = public;
 
 -- ---------------------------------------------------------------------------
+-- RPC: activate/deactivate a company. Only callable by a super_admin.
+--
+-- This is a soft "remove" for a company that's stopped operating: it stops
+-- them creating new official events or rewards (enforce_official_event_rules
+-- + rewards_insert_verified_company below both check is_active), but never
+-- deletes anything — their past events, points already earned from them,
+-- and issued redemption codes all stay exactly as they were. A hard delete
+-- would cascade and destroy that history for every user who earned points
+-- there, which is never what "this company doesn't work with us any more"
+-- actually means.
+-- ---------------------------------------------------------------------------
+create or replace function set_company_active(p_company_id uuid, p_active boolean)
+returns void as $$
+begin
+  if not exists (select 1 from profiles where id = auth.uid() and role = 'super_admin') then
+    raise exception 'Only a Yalla admin can do this';
+  end if;
+  update profiles set is_active = p_active where id = p_company_id and role = 'company';
+end;
+$$ language plpgsql security definer set search_path = public;
+
+-- ---------------------------------------------------------------------------
+-- RPC: redeem (fulfil) a reward code at the point of pickup. Only callable
+-- by the company that issued it. This is the actual "verification system"
+-- for handing over a reward — a code is worthless until a staff member at
+-- that company looks it up here and it flips to 'used', which can only
+-- happen once.
+-- ---------------------------------------------------------------------------
+create or replace function redeem_code(p_code text)
+returns table(id uuid, user_id uuid, reward_id uuid, points_spent int, redeemed_at timestamptz, status redemption_status) as $$
+declare
+  v_id uuid;
+  v_company_id uuid;
+  v_status redemption_status;
+begin
+  select r.id, r.company_id, r.status into v_id, v_company_id, v_status
+  from redemptions r where upper(r.code) = upper(trim(p_code));
+
+  if v_id is null then
+    raise exception 'No redemption found with that code';
+  end if;
+  if v_company_id <> auth.uid() then
+    raise exception 'This code was not issued by your company';
+  end if;
+  if v_status = 'used' then
+    raise exception 'This code has already been used';
+  end if;
+
+  update redemptions set status = 'used' where redemptions.id = v_id;
+
+  return query
+    select redemptions.id, redemptions.user_id, redemptions.reward_id, redemptions.points_spent, redemptions.redeemed_at, redemptions.status
+    from redemptions where redemptions.id = v_id;
+end;
+$$ language plpgsql security definer set search_path = public;
+
+-- ---------------------------------------------------------------------------
 -- Row Level Security
 -- ---------------------------------------------------------------------------
 alter table profiles enable row level security;
@@ -409,15 +469,23 @@ create policy "profiles_select_all" on profiles for select using (true);
 drop policy if exists "profiles_update_own" on profiles;
 create policy "profiles_update_own" on profiles for update using (auth.uid() = id);
 
--- events: readable by everyone, writable only by the host.
+-- events: readable by everyone, writable by the host, or by an admin acting
+-- on anyone's event (Postgres OR's multiple permissive policies for the same
+-- command together, so either condition is enough).
 drop policy if exists "events_select_all" on events;
 create policy "events_select_all" on events for select using (true);
 drop policy if exists "events_insert_own" on events;
 create policy "events_insert_own" on events for insert with check (auth.uid() = host_id);
 drop policy if exists "events_update_own" on events;
 create policy "events_update_own" on events for update using (auth.uid() = host_id);
+drop policy if exists "events_update_admin" on events;
+create policy "events_update_admin" on events for update
+  using (exists (select 1 from profiles where id = auth.uid() and role = 'super_admin'));
 drop policy if exists "events_delete_own" on events;
 create policy "events_delete_own" on events for delete using (auth.uid() = host_id);
+drop policy if exists "events_delete_admin" on events;
+create policy "events_delete_admin" on events for delete
+  using (exists (select 1 from profiles where id = auth.uid() and role = 'super_admin'));
 
 -- registrations: readable by everyone (attendee counts, "friends going"),
 -- users manage only their own row; marking "attended" only via the RPC above.
@@ -450,20 +518,32 @@ drop policy if exists "points_select_own" on points_entries;
 create policy "points_select_own" on points_entries for select
   using (auth.uid() = user_id or auth.uid() = company_id);
 
--- rewards: readable by everyone, writable only by a verified company.
+-- rewards: readable by everyone, writable by the issuing (verified, active)
+-- company, or by an admin acting on anyone's reward.
 drop policy if exists "rewards_select_all" on rewards;
 create policy "rewards_select_all" on rewards for select using (true);
 drop policy if exists "rewards_insert_verified_company" on rewards;
 create policy "rewards_insert_verified_company" on rewards for insert
   with check (
     auth.uid() = company_id
-    and exists (select 1 from profiles where id = auth.uid() and role = 'company' and company_verified)
+    and exists (
+      select 1 from profiles
+      where id = auth.uid() and role = 'company' and company_verified and coalesce(is_active, true)
+    )
   );
 drop policy if exists "rewards_update_own" on rewards;
 create policy "rewards_update_own" on rewards for update using (auth.uid() = company_id);
+drop policy if exists "rewards_update_admin" on rewards;
+create policy "rewards_update_admin" on rewards for update
+  using (exists (select 1 from profiles where id = auth.uid() and role = 'super_admin'));
+drop policy if exists "rewards_delete_own" on rewards;
+create policy "rewards_delete_own" on rewards for delete using (auth.uid() = company_id);
+drop policy if exists "rewards_delete_admin" on rewards;
+create policy "rewards_delete_admin" on rewards for delete
+  using (exists (select 1 from profiles where id = auth.uid() and role = 'super_admin'));
 
 -- redemptions: visible to the redeemer and the issuing company; written
--- only via the redeem_reward RPC.
+-- only via the redeem_reward / redeem_code RPCs above.
 drop policy if exists "redemptions_select_own" on redemptions;
 create policy "redemptions_select_own" on redemptions for select
   using (auth.uid() = user_id or auth.uid() = company_id);

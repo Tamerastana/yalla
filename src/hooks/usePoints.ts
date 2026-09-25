@@ -28,3 +28,9 @@ export function useRedeemReward(userId: string | undefined) {
     },
   })
 }
+
+export function useFulfillRedemptionCode() {
+  return useMutation({
+    mutationFn: (code: string) => pointsApi.fulfillRedemptionCode(code),
+  })
+}

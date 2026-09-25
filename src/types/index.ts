@@ -38,6 +38,8 @@ export interface CompanyProfile {
   /** verification is granted only by a super_admin */
   verifiedAt?: string
   verifiedBy?: string
+  /** false once a super_admin has deactivated this company; history stays intact */
+  active: boolean
 }
 
 export interface User {

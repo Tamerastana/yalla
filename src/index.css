@@ -61,10 +61,13 @@
   }
   html {
     scroll-behavior: smooth;
+    overflow-x: hidden;
   }
   body {
     @apply bg-white text-ink-800 antialiased;
     font-family: var(--font-sans);
+    overflow-x: hidden;
+    width: 100%;
   }
   ::selection {
     @apply bg-brand-200 text-brand-900;

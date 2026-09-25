@@ -76,6 +76,46 @@ export async function createEvent(input: CreateEventInput): Promise<SportEvent> 
   return mapEvent(data)
 }
 
+export type UpdateEventInput = Partial<Omit<CreateEventInput, 'hostId'>>
+
+/**
+ * RLS allows this for the event's own host or a super_admin (see
+ * events_update_own / events_update_admin in schema.sql) — anyone else's
+ * request affects 0 rows rather than erroring, so callers should treat "no
+ * rows returned" as a permission failure.
+ */
+export async function updateEvent(eventId: string, input: UpdateEventInput): Promise<SportEvent> {
+  const row: Record<string, unknown> = {}
+  if (input.title !== undefined) row.title = input.title.trim()
+  if (input.description !== undefined) row.description = input.description.trim()
+  if (input.category !== undefined) row.category = input.category
+  if (input.startsAt !== undefined) row.starts_at = input.startsAt
+  if (input.endsAt !== undefined) row.ends_at = input.endsAt
+  if (input.capacity !== undefined) row.capacity = input.capacity
+  if (input.priceAED !== undefined) row.price_aed = input.priceAED
+  if (input.pointsPerAttendee !== undefined) row.points_per_attendee = Math.max(0, input.pointsPerAttendee)
+  if (input.imageUrl !== undefined) row.image_url = input.imageUrl
+  if (input.requestOfficial !== undefined) row.type = input.requestOfficial ? 'official' : 'community'
+  if (input.location !== undefined) {
+    row.location_name = input.location.name
+    row.address = input.location.address
+    row.emirate = input.location.emirate
+    row.lat = input.location.point.lat
+    row.lng = input.location.point.lng
+  }
+
+  const { data, error } = await supabase.from('events').update(row).eq('id', eventId).select('*').maybeSingle()
+  if (error) throw new Error(error.message)
+  if (!data) throw new Error("You don't have permission to edit this event.")
+  return mapEvent(data)
+}
+
+export async function deleteEvent(eventId: string): Promise<void> {
+  const { data, error } = await supabase.from('events').delete().eq('id', eventId).select('id').maybeSingle()
+  if (error) throw new Error(error.message)
+  if (!data) throw new Error("You don't have permission to delete this event.")
+}
+
 export async function promoteEvent(eventId: string, tier: 1 | 2 | 3, days = 7): Promise<void> {
   const promotedUntil = new Date(Date.now() + days * 86_400_000).toISOString()
   const { error } = await supabase

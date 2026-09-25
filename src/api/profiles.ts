@@ -58,3 +58,13 @@ export async function verifyCompany(companyId: string): Promise<void> {
   const { error } = await supabase.rpc('verify_company', { p_company_id: companyId })
   if (error) throw new Error(error.message)
 }
+
+/**
+ * Soft "removes" a company: they can no longer create new official events or
+ * rewards, but nothing about them or their history is deleted — past events,
+ * points already earned from them, and issued redemption codes stay intact.
+ */
+export async function setCompanyActive(companyId: string, active: boolean): Promise<void> {
+  const { error } = await supabase.rpc('set_company_active', { p_company_id: companyId, p_active: active })
+  if (error) throw new Error(error.message)
+}

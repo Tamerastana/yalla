@@ -28,3 +28,21 @@ export async function redeemReward(rewardId: string): Promise<{ redemptionId: st
   const row = data as { redemption_id: string; code: string }
   return { redemptionId: row.redemption_id, code: row.code }
 }
+
+/**
+ * Fulfils a reward at the point of pickup — only the company that issued
+ * the code can call this, and only once (see redeem_code() in schema.sql).
+ * This is the actual hand-over verification: a code means nothing until a
+ * staff member looks it up here and it flips to 'used'.
+ */
+export async function fulfillRedemptionCode(code: string): Promise<{
+  id: string
+  userId: string
+  rewardId: string
+  pointsSpent: number
+}> {
+  const { data, error } = await supabase.rpc('redeem_code', { p_code: code }).single()
+  if (error) throw new Error(error.message)
+  const row = data as { id: string; user_id: string; reward_id: string; points_spent: number }
+  return { id: row.id, userId: row.user_id, rewardId: row.reward_id, pointsSpent: row.points_spent }
+}

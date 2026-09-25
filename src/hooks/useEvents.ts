@@ -41,6 +41,26 @@ export function useCreateEvent() {
   })
 }
 
+export function useUpdateEvent(eventId: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (input: eventsApi.UpdateEventInput) => eventsApi.updateEvent(eventId, input),
+    onSuccess: (event) => {
+      queryClient.invalidateQueries({ queryKey: ['events'] })
+      queryClient.invalidateQueries({ queryKey: ['events', eventId] })
+      queryClient.invalidateQueries({ queryKey: ['events', 'byHost', event.hostId] })
+    },
+  })
+}
+
+export function useDeleteEvent() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (eventId: string) => eventsApi.deleteEvent(eventId),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['events'] }),
+  })
+}
+
 export function usePromoteEvent(eventId: string) {
   const queryClient = useQueryClient()
   return useMutation({

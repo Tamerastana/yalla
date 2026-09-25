@@ -24,3 +24,25 @@ export function useCreateReward() {
     },
   })
 }
+
+export function useUpdateReward(rewardId: string, companyId: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (input: rewardsApi.UpdateRewardInput) => rewardsApi.updateReward(rewardId, input),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['rewards', 'company', companyId] })
+      queryClient.invalidateQueries({ queryKey: ['rewards', 'active'] })
+    },
+  })
+}
+
+export function useDeleteReward(companyId: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (rewardId: string) => rewardsApi.deleteReward(rewardId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['rewards', 'company', companyId] })
+      queryClient.invalidateQueries({ queryKey: ['rewards', 'active'] })
+    },
+  })
+}
