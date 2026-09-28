@@ -101,3 +101,7 @@ add a reward, redeem it.
   click — see the fuller abuse/security review shared separately for what
   a real launch would still need (QR/geofenced check-in, company KYB
   verification, content moderation, rate limiting, etc).
+
+## Lumos Global Education website
+
+The `lumos/` folder is a separate project: the Lumos Global Education website and admin panel. See [`lumos/README.md`](./lumos/README.md).

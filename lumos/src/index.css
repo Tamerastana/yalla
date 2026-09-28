@@ -1,0 +1,64 @@
+@import "tailwindcss";
+
+@theme {
+  /* Figtree has no Cyrillic, so Russian text falls through to Onest. */
+  --font-sans: "Figtree", "Onest", ui-sans-serif, system-ui, sans-serif;
+  --font-serif: "Cormorant Garamond", Georgia, serif;
+
+  --color-navy-950: #090e22;
+  --color-navy-900: #0c1535;
+  --color-navy-800: #13204f;
+  --color-navy-700: #1a2a5e;
+  --color-navy-600: #2a3b75;
+  --color-slate-ink: #4a5578;
+
+  --color-gold-300: #e2c683;
+  --color-gold-400: #d4b262;
+  --color-gold-500: #c9a24c;
+  --color-gold-600: #b08a36;
+
+  --color-cream: #f5f0e6;
+}
+
+html {
+  scroll-behavior: smooth;
+  scroll-padding-top: 6rem;
+}
+
+body {
+  @apply bg-white font-sans text-navy-800 antialiased;
+}
+
+@utility container-x {
+  @apply mx-auto w-full max-w-[1240px] px-5 sm:px-8;
+}
+
+@utility eyebrow {
+  @apply text-[15px] font-medium text-gold-600;
+}
+
+@utility display {
+  @apply font-serif font-medium leading-[1.05] tracking-[-0.01em];
+}
+
+@utility btn {
+  @apply inline-flex items-center justify-center gap-2 rounded-full px-7 py-3.5 text-[15px] font-semibold transition focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-gold-500 disabled:opacity-60;
+}
+@utility btn-gold {
+  @apply btn bg-gold-500 text-navy-900 hover:bg-gold-400;
+}
+@utility btn-navy {
+  @apply btn bg-navy-800 text-white hover:bg-navy-700;
+}
+@utility btn-outline-light {
+  @apply btn border-[1.5px] border-white/80 text-white hover:bg-white/10;
+}
+@utility btn-outline-dark {
+  @apply btn border-[1.5px] border-navy-800 text-navy-800 hover:bg-navy-800/5;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+}
