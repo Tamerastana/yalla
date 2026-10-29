@@ -1,0 +1,14 @@
+{
+  "name": "Yalla — Sports events across the UAE",
+  "short_name": "Yalla",
+  "description": "Find, join and host sports events across the UAE. Earn points at official company events and redeem real rewards.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#ea580c",
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
