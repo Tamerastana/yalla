@@ -11,6 +11,8 @@ interface AuthContextValue {
   logIn: (input: { email: string; password: string }) => Promise<User>
   logOut: () => Promise<void>
   refreshUser: () => Promise<void>
+  requestPasswordReset: (email: string) => Promise<void>
+  updatePassword: (newPassword: string) => Promise<void>
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null)
@@ -67,6 +69,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (!user) return
       const fresh = await authApi.fetchProfile(user.id)
       setUser(fresh ?? undefined)
+    },
+    requestPasswordReset: authApi.requestPasswordReset,
+    updatePassword: async (newPassword) => {
+      await authApi.updatePassword(newPassword)
+      setUser(undefined)
+      queryClient.clear()
     },
   }
 

@@ -41,6 +41,10 @@ do $$ begin
   create type redemption_status as enum ('issued', 'used');
 exception when duplicate_object then null; end $$;
 
+do $$ begin
+  create type reward_status as enum ('pending', 'approved', 'rejected');
+exception when duplicate_object then null; end $$;
+
 -- ---------------------------------------------------------------------------
 -- profiles (1:1 with auth.users)
 -- ---------------------------------------------------------------------------
@@ -148,20 +152,45 @@ create table if not exists points_entries (
 create index if not exists points_user_company_idx on points_entries(user_id, company_id);
 
 -- ---------------------------------------------------------------------------
+-- reward_categories (per-company sections, e.g. "Food", "Discounts", "Merch")
+-- ---------------------------------------------------------------------------
+create table if not exists reward_categories (
+  id uuid primary key default gen_random_uuid(),
+  company_id uuid not null references profiles(id) on delete cascade,
+  name text not null,
+  created_at timestamptz not null default now(),
+  unique (company_id, name)
+);
+
+create index if not exists reward_categories_company_idx on reward_categories(company_id);
+
+-- ---------------------------------------------------------------------------
 -- rewards
 -- ---------------------------------------------------------------------------
 create table if not exists rewards (
   id uuid primary key default gen_random_uuid(),
   company_id uuid not null references profiles(id) on delete cascade,
+  category_id uuid references reward_categories(id) on delete set null,
   title text not null,
   description text not null default '',
   cost_points int not null check (cost_points > 0),
   image_url text not null default '',
   stock int not null default 0,
-  active boolean not null default true
+  active boolean not null default true,
+  /** Moderation state: a reward only reaches players once a super_admin approves it. */
+  status reward_status not null default 'pending',
+  rejection_reason text,
+  reviewed_at timestamptz,
+  reviewed_by uuid references profiles(id)
 );
 
 create index if not exists rewards_company_idx on rewards(company_id);
+create index if not exists rewards_status_idx on rewards(status);
+create index if not exists rewards_category_idx on rewards(category_id);
+
+-- points_entries.reward_id is added here (after rewards exists) rather than
+-- in the points_entries table above, which is defined earlier in this file.
+alter table points_entries add column if not exists reward_id uuid references rewards(id) on delete set null;
 
 -- ---------------------------------------------------------------------------
 -- redemptions
@@ -291,6 +320,67 @@ create trigger enforce_event_capacity_trigger
   for each row execute function enforce_event_capacity();
 
 -- ---------------------------------------------------------------------------
+-- Guard: a reward only reaches players once a super_admin approves it.
+-- - On insert, always force 'pending' — a company can never publish straight
+--   to approved by crafting the request.
+-- - On update by anyone other than a super_admin (i.e. the owning company,
+--   via rewards_update_own below), the moderation columns are reverted to
+--   their previous values first (a company can't set its own reward to
+--   'approved'), and then, if the actual catalogue content changed
+--   (title/description/cost/image — what an admin is actually reviewing),
+--   the reward is bounced back to 'pending' for re-review. Toggling `active`
+--   or restocking doesn't require re-review.
+-- - auth.uid() is null for the SQL Editor / migrations (trusted), and a
+--   super_admin's own update (via approve_reward/reject_reward or a direct
+--   admin edit) is left alone either way.
+-- ---------------------------------------------------------------------------
+create or replace function enforce_reward_review_status()
+returns trigger as $$
+declare
+  v_is_admin boolean;
+begin
+  if tg_op = 'INSERT' then
+    new.status := 'pending';
+    new.rejection_reason := null;
+    new.reviewed_at := null;
+    new.reviewed_by := null;
+    return new;
+  end if;
+
+  if auth.uid() is null then
+    return new;
+  end if;
+
+  select exists(select 1 from profiles where id = auth.uid() and role = 'super_admin') into v_is_admin;
+  if v_is_admin then
+    return new;
+  end if;
+
+  new.status := old.status;
+  new.rejection_reason := old.rejection_reason;
+  new.reviewed_at := old.reviewed_at;
+  new.reviewed_by := old.reviewed_by;
+
+  if new.title is distinct from old.title
+     or new.description is distinct from old.description
+     or new.cost_points is distinct from old.cost_points
+     or new.image_url is distinct from old.image_url then
+    new.status := 'pending';
+    new.rejection_reason := null;
+    new.reviewed_at := null;
+    new.reviewed_by := null;
+  end if;
+
+  return new;
+end;
+$$ language plpgsql security definer set search_path = public;
+
+drop trigger if exists enforce_reward_review_status_trigger on rewards;
+create trigger enforce_reward_review_status_trigger
+  before insert or update on rewards
+  for each row execute function enforce_reward_review_status();
+
+-- ---------------------------------------------------------------------------
 -- RPC: mark a registrant attended. Only the event's host may call this.
 -- Awards points atomically, only for official events, only once.
 -- ---------------------------------------------------------------------------
@@ -339,15 +429,19 @@ declare
   v_cost int;
   v_stock int;
   v_active boolean;
+  v_status reward_status;
   v_balance int;
   v_code text;
   v_redemption_id uuid;
 begin
-  select company_id, cost_points, stock, active into v_company_id, v_cost, v_stock, v_active
+  select company_id, cost_points, stock, active, status into v_company_id, v_cost, v_stock, v_active, v_status
   from rewards where id = p_reward_id for update;
 
   if v_company_id is null then
     raise exception 'Reward not found';
+  end if;
+  if v_status <> 'approved' then
+    raise exception 'This reward is not available';
   end if;
   if not v_active or v_stock <= 0 then
     raise exception 'This reward is out of stock';
@@ -366,8 +460,8 @@ begin
   -- fail here with "function does not exist".
   v_code := 'YALLA-' || upper(substr(md5(random()::text || clock_timestamp()::text), 1, 8));
 
-  insert into points_entries (user_id, company_id, points, kind, note)
-  values (auth.uid(), v_company_id, v_cost, 'redeemed', 'Redeemed reward');
+  insert into points_entries (user_id, company_id, reward_id, points, kind, note)
+  values (auth.uid(), v_company_id, p_reward_id, v_cost, 'redeemed', 'Redeemed reward');
 
   update rewards set stock = stock - 1 where id = p_reward_id;
 
@@ -376,6 +470,35 @@ begin
   returning id into v_redemption_id;
 
   return query select v_redemption_id, v_code;
+end;
+$$ language plpgsql security definer set search_path = public;
+
+-- ---------------------------------------------------------------------------
+-- RPC: approve/reject a pending reward. Only callable by a super_admin.
+-- Only an approved reward is selectable by anyone other than its own
+-- company or an admin (see rewards_select policy below).
+-- ---------------------------------------------------------------------------
+create or replace function approve_reward(p_reward_id uuid)
+returns void as $$
+begin
+  if not exists (select 1 from profiles where id = auth.uid() and role = 'super_admin') then
+    raise exception 'Only a Yalla admin can approve rewards';
+  end if;
+  update rewards
+  set status = 'approved', rejection_reason = null, reviewed_at = now(), reviewed_by = auth.uid()
+  where id = p_reward_id;
+end;
+$$ language plpgsql security definer set search_path = public;
+
+create or replace function reject_reward(p_reward_id uuid, p_reason text default null)
+returns void as $$
+begin
+  if not exists (select 1 from profiles where id = auth.uid() and role = 'super_admin') then
+    raise exception 'Only a Yalla admin can reject rewards';
+  end if;
+  update rewards
+  set status = 'rejected', rejection_reason = p_reason, reviewed_at = now(), reviewed_by = auth.uid()
+  where id = p_reward_id;
 end;
 $$ language plpgsql security definer set search_path = public;
 
@@ -461,6 +584,7 @@ alter table friendships enable row level security;
 alter table points_entries enable row level security;
 alter table rewards enable row level security;
 alter table redemptions enable row level security;
+alter table reward_categories enable row level security;
 
 -- profiles: readable by everyone (host names, friend search, attendee lists),
 -- writable only by the owner (privileged columns are further guarded above).
@@ -518,10 +642,19 @@ drop policy if exists "points_select_own" on points_entries;
 create policy "points_select_own" on points_entries for select
   using (auth.uid() = user_id or auth.uid() = company_id);
 
--- rewards: readable by everyone, writable by the issuing (verified, active)
--- company, or by an admin acting on anyone's reward.
+-- rewards: an approved reward is visible to everyone; a pending/rejected one
+-- is visible only to its own company and to admins (who moderate it).
+-- Writable by the issuing (verified, active) company, or by an admin acting
+-- on anyone's reward — see enforce_reward_review_status_trigger above for
+-- why a company can't set its own reward straight to 'approved'.
 drop policy if exists "rewards_select_all" on rewards;
-create policy "rewards_select_all" on rewards for select using (true);
+drop policy if exists "rewards_select" on rewards;
+create policy "rewards_select" on rewards for select
+  using (
+    status = 'approved'
+    or auth.uid() = company_id
+    or exists (select 1 from profiles where id = auth.uid() and role = 'super_admin')
+  );
 drop policy if exists "rewards_insert_verified_company" on rewards;
 create policy "rewards_insert_verified_company" on rewards for insert
   with check (
@@ -540,6 +673,31 @@ drop policy if exists "rewards_delete_own" on rewards;
 create policy "rewards_delete_own" on rewards for delete using (auth.uid() = company_id);
 drop policy if exists "rewards_delete_admin" on rewards;
 create policy "rewards_delete_admin" on rewards for delete
+  using (exists (select 1 from profiles where id = auth.uid() and role = 'super_admin'));
+
+-- reward_categories: readable by everyone (it's just the section headings on
+-- a company's store page), writable only by the (verified, active) owning
+-- company, or an admin.
+drop policy if exists "reward_categories_select_all" on reward_categories;
+create policy "reward_categories_select_all" on reward_categories for select using (true);
+drop policy if exists "reward_categories_insert_verified_company" on reward_categories;
+create policy "reward_categories_insert_verified_company" on reward_categories for insert
+  with check (
+    auth.uid() = company_id
+    and exists (
+      select 1 from profiles
+      where id = auth.uid() and role = 'company' and company_verified and coalesce(is_active, true)
+    )
+  );
+drop policy if exists "reward_categories_update_own" on reward_categories;
+create policy "reward_categories_update_own" on reward_categories for update using (auth.uid() = company_id);
+drop policy if exists "reward_categories_update_admin" on reward_categories;
+create policy "reward_categories_update_admin" on reward_categories for update
+  using (exists (select 1 from profiles where id = auth.uid() and role = 'super_admin'));
+drop policy if exists "reward_categories_delete_own" on reward_categories;
+create policy "reward_categories_delete_own" on reward_categories for delete using (auth.uid() = company_id);
+drop policy if exists "reward_categories_delete_admin" on reward_categories;
+create policy "reward_categories_delete_admin" on reward_categories for delete
   using (exists (select 1 from profiles where id = auth.uid() and role = 'super_admin'));
 
 -- redemptions: visible to the redeemer and the issuing company; written

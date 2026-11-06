@@ -1,19 +1,6 @@
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import {
-  Award,
-  Calendar,
-  Check,
-  Gift,
-  History,
-  MapPin,
-  Pencil,
-  Ticket,
-  Trophy,
-  UserPlus,
-  Users,
-  X,
-} from 'lucide-react'
+import { Calendar, Check, History, MapPin, Pencil, Trophy, UserPlus, Users, X } from 'lucide-react'
 import { clsx } from 'clsx'
 import { CATEGORY_META, EMIRATES } from '../lib/categories'
 import { formatEventDate } from '../lib/format'
@@ -21,7 +8,7 @@ import { useAuth } from '../context/AuthContext'
 import { useEventsByHost, useEventsByIds } from '../hooks/useEvents'
 import { useUserRegistrations } from '../hooks/useRegistrations'
 import { useFriendships, useRespondToFriendRequest, useSendFriendRequest } from '../hooks/useFriendships'
-import { usePointsHistory, useRedemptions } from '../hooks/usePoints'
+import { usePointsHistory } from '../hooks/usePoints'
 import { useSearchProfiles, useUpdateProfile, useUsersByIds } from '../hooks/useProfiles'
 import { Avatar } from '../components/ui/Avatar'
 import { Badge } from '../components/ui/Badge'
@@ -32,7 +19,8 @@ import { Input, Label, Select, Textarea } from '../components/ui/Input'
 import { Modal } from '../components/ui/Modal'
 import { PageLoader } from '../components/ui/Spinner'
 import { SafeImage } from '../components/ui/SafeImage'
-import type { Emirate, PointsEntry, SportEvent, User } from '../types'
+import { PointsHistory } from '../components/points/PointsHistory'
+import type { Emirate, SportEvent, User } from '../types'
 
 type Tab = 'upcoming' | 'history' | 'friends' | 'points'
 
@@ -145,7 +133,7 @@ export function ProfilePage() {
         {tab === 'upcoming' && <UpcomingTab events={upcoming} />}
         {tab === 'history' && <HistoryTab attended={attended} created={created} />}
         {tab === 'friends' && <FriendsTab userId={user.id} />}
-        {tab === 'points' && <PointsTab userId={user.id} points={pointsQuery.data ?? []} />}
+        {tab === 'points' && <PointsHistory userId={user.id} />}
       </div>
 
       <EditProfileModal open={editOpen} onClose={() => setEditOpen(false)} user={user} />
@@ -333,91 +321,6 @@ function FriendsTab({ userId }: { userId: string }) {
   )
 }
 
-function PointsTab({ userId, points }: { userId: string; points: PointsEntry[] }) {
-  const companyIds = useMemo(() => Array.from(new Set(points.map((p) => p.companyId))), [points])
-  const companiesQuery = useUsersByIds(companyIds)
-  const companyById = new Map((companiesQuery.data ?? []).map((c) => [c.id, c]))
-
-  const balances = companyIds.map((companyId) => ({
-    companyId,
-    company: companyById.get(companyId),
-    balance: points.filter((p) => p.companyId === companyId).reduce((s, p) => s + (p.kind === 'earned' ? p.points : -p.points), 0),
-  }))
-
-  const redemptionsQuery = useRedemptions(userId)
-  const redemptions = redemptionsQuery.data ?? []
-
-  return (
-    <div className="space-y-6">
-      <div>
-        <h3 className="mb-2 text-sm font-bold text-ink-900">Points by company</h3>
-        {balances.length === 0 ? (
-          <EmptyState
-            icon={<Award size={20} />}
-            title="No points yet"
-            description="Attend official events from verified companies to start earning points."
-          />
-        ) : (
-          <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
-            {balances.map((b) => (
-              <Card key={b.companyId} className="flex items-center justify-between p-3.5">
-                <div className="flex items-center gap-2.5">
-                  <Avatar name={b.company?.name ?? 'Company'} src={b.company?.avatarUrl} size={32} />
-                  <span className="text-sm font-semibold text-ink-800">{b.company?.company?.companyName ?? b.company?.name}</span>
-                </div>
-                <span className="font-extrabold text-brand-600">{b.balance} pts</span>
-              </Card>
-            ))}
-          </div>
-        )}
-        <Link to="/rewards" className="mt-3 inline-flex">
-          <Button variant="outline" size="sm">
-            <Gift size={14} /> Browse rewards
-          </Button>
-        </Link>
-      </div>
-
-      {redemptions.length > 0 && (
-        <div>
-          <h3 className="mb-2 text-sm font-bold text-ink-900">Redemptions</h3>
-          <div className="space-y-2">
-            {redemptions.map((r) => (
-              <Card key={r.id} className="flex items-center justify-between p-3.5">
-                <div className="flex items-center gap-2.5">
-                  <Ticket size={16} className="text-brand-500" />
-                  <div>
-                    <p className="text-sm font-semibold text-ink-800">{r.code}</p>
-                    <p className="text-xs text-ink-400">{formatEventDate(r.redeemedAt)}</p>
-                  </div>
-                </div>
-                <Badge tone={r.status === 'used' ? 'neutral' : 'success'}>{r.status === 'used' ? 'Used' : 'Ready to use'}</Badge>
-              </Card>
-            ))}
-          </div>
-        </div>
-      )}
-
-      <div>
-        <h3 className="mb-2 text-sm font-bold text-ink-900">Activity</h3>
-        <div className="divide-y divide-ink-100 rounded-2xl border border-ink-100">
-          {points.length === 0 && <p className="p-3.5 text-sm text-ink-500">No activity yet.</p>}
-          {points.map((h) => (
-            <div key={h.id} className="flex items-center justify-between p-3.5">
-              <div>
-                <p className="text-sm font-medium text-ink-700">{h.note}</p>
-                <p className="text-xs text-ink-400">{formatEventDate(h.createdAt)}</p>
-              </div>
-              <span className={clsx('font-bold', h.kind === 'earned' ? 'text-emerald-600' : 'text-ink-500')}>
-                {h.kind === 'earned' ? '+' : '-'}
-                {h.points}
-              </span>
-            </div>
-          ))}
-        </div>
-      </div>
-    </div>
-  )
-}
 
 function EditProfileModal({ open, onClose, user }: { open: boolean; onClose: () => void; user: User }) {
   const { refreshUser } = useAuth()

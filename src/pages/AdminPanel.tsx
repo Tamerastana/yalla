@@ -1,19 +1,22 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Building2, Calendar, Pencil, Power, ShieldCheck, Trash2, Users } from 'lucide-react'
+import { Building2, Calendar, Check, Pencil, Power, ShieldCheck, Trash2, Users, X } from 'lucide-react'
 import { CATEGORY_META } from '../lib/categories'
 import { formatEventDate } from '../lib/format'
 import { useAuth } from '../context/AuthContext'
 import { useDeleteEvent, useEvents } from '../hooks/useEvents'
-import { useCompanies, usePlayers, useSetCompanyActive, useVerifyCompany } from '../hooks/useProfiles'
-import { useActiveRewards, useDeleteReward } from '../hooks/useRewards'
+import { useCompanies, usePlayers, useSetCompanyActive, useUsersByIds, useVerifyCompany } from '../hooks/useProfiles'
+import { useActiveRewards, useApproveReward, useDeleteReward, usePendingRewards, useRejectReward } from '../hooks/useRewards'
 import { Avatar } from '../components/ui/Avatar'
 import { Badge } from '../components/ui/Badge'
 import { Button } from '../components/ui/Button'
 import { Card } from '../components/ui/Card'
+import { Input } from '../components/ui/Input'
+import { Modal } from '../components/ui/Modal'
 import { PageLoader } from '../components/ui/Spinner'
 import { SafeImage } from '../components/ui/SafeImage'
 import { clsx } from 'clsx'
+import type { Reward } from '../types'
 
 type Tab = 'companies' | 'events' | 'rewards'
 
@@ -24,6 +27,7 @@ export function AdminPanelPage() {
   const eventsQuery = useEvents()
   const playersQuery = usePlayers()
   const rewardsQuery = useActiveRewards()
+  const pendingRewardsQuery = usePendingRewards()
 
   if (!user || user.role !== 'super_admin') return null
   if (companiesQuery.isLoading || eventsQuery.isLoading || playersQuery.isLoading) return <PageLoader />
@@ -32,11 +36,12 @@ export function AdminPanelPage() {
   const allEvents = eventsQuery.data ?? []
   const players = playersQuery.data ?? []
   const rewards = rewardsQuery.data ?? []
+  const pendingRewards = pendingRewardsQuery.data ?? []
 
   const tabs: { id: Tab; label: string; count: number }[] = [
     { id: 'companies', label: 'Companies', count: companies.length },
     { id: 'events', label: 'Events', count: allEvents.length },
-    { id: 'rewards', label: 'Rewards', count: rewards.length },
+    { id: 'rewards', label: 'Rewards', count: rewards.length + pendingRewards.length },
   ]
 
   return (
@@ -70,7 +75,7 @@ export function AdminPanelPage() {
       <div className="mt-5">
         {tab === 'companies' && <CompaniesTab companies={companies} />}
         {tab === 'events' && <EventsTab events={allEvents} />}
-        {tab === 'rewards' && <RewardsTab rewards={rewards} />}
+        {tab === 'rewards' && <RewardsTab rewards={rewards} pendingRewards={pendingRewards} />}
       </div>
     </div>
   )
@@ -177,38 +182,127 @@ function EventsTab({ events }: { events: ReturnType<typeof useEvents>['data'] })
   )
 }
 
-function RewardsTab({ rewards }: { rewards: ReturnType<typeof useActiveRewards>['data'] }) {
+function RewardsTab({
+  rewards,
+  pendingRewards,
+}: {
+  rewards: ReturnType<typeof useActiveRewards>['data']
+  pendingRewards: ReturnType<typeof usePendingRewards>['data']
+}) {
   const deleteReward = useDeleteReward('')
+  const approveReward = useApproveReward()
+  const [rejectTarget, setRejectTarget] = useState<Reward | null>(null)
+
+  const pending = pendingRewards ?? []
+  const companyIds = Array.from(new Set(pending.map((r) => r.companyId)))
+  const companiesQuery = useUsersByIds(companyIds)
+  const companyById = new Map((companiesQuery.data ?? []).map((c) => [c.id, c]))
 
   const handleDelete = (id: string, title: string) => {
     if (!window.confirm(`Remove "${title}" permanently? This cannot be undone.`)) return
     deleteReward.mutate(id)
   }
 
-  if ((rewards ?? []).length === 0) {
-    return <p className="text-sm text-ink-500">No active rewards on the platform right now.</p>
+  return (
+    <div className="space-y-8">
+      <div>
+        <h3 className="mb-3 flex items-center gap-2 text-sm font-bold text-ink-900">
+          Pending approval {pending.length > 0 && <Badge tone="warning">{pending.length}</Badge>}
+        </h3>
+        {pending.length === 0 ? (
+          <p className="text-sm text-ink-500">No rewards waiting for review.</p>
+        ) : (
+          <div className="space-y-2.5">
+            {pending.map((r) => {
+              const company = companyById.get(r.companyId)
+              return (
+                <Card key={r.id} className="flex flex-wrap items-center gap-3 p-3">
+                  <SafeImage src={r.imageUrl} alt="" className="h-12 w-12 shrink-0 rounded-xl object-cover" />
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-bold text-ink-900">{r.title}</p>
+                    <p className="text-xs text-ink-500">
+                      {company?.company?.companyName ?? 'Company'} &middot; {r.costPoints} pts &middot; {r.stock} left
+                    </p>
+                  </div>
+                  <div className="flex shrink-0 gap-1.5">
+                    <Button size="sm" disabled={approveReward.isPending} onClick={() => approveReward.mutate(r.id)}>
+                      <Check size={13} /> Approve
+                    </Button>
+                    <Button size="sm" variant="outline" onClick={() => setRejectTarget(r)}>
+                      <X size={13} /> Reject
+                    </Button>
+                  </div>
+                </Card>
+              )
+            })}
+          </div>
+        )}
+      </div>
+
+      <div>
+        <h3 className="mb-3 text-sm font-bold text-ink-900">Live on the platform</h3>
+        {(rewards ?? []).length === 0 ? (
+          <p className="text-sm text-ink-500">No approved rewards on the platform right now.</p>
+        ) : (
+          <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+            {(rewards ?? []).map((r) => (
+              <Card key={r.id} className="flex items-center gap-3 p-3">
+                <SafeImage src={r.imageUrl} alt="" className="h-12 w-12 shrink-0 rounded-xl object-cover" />
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-bold text-ink-900">{r.title}</p>
+                  <p className="text-xs text-ink-500">
+                    {r.costPoints} pts &middot; {r.stock} left
+                  </p>
+                </div>
+                <button
+                  onClick={() => handleDelete(r.id, r.title)}
+                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-ink-400 hover:bg-red-50 hover:text-red-600"
+                  aria-label="Remove reward"
+                >
+                  <Trash2 size={15} />
+                </button>
+              </Card>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <RejectRewardModal reward={rejectTarget} onClose={() => setRejectTarget(null)} />
+    </div>
+  )
+}
+
+function RejectRewardModal({ reward, onClose }: { reward: Reward | null; onClose: () => void }) {
+  const [reason, setReason] = useState('')
+  const rejectReward = useRejectReward()
+
+  if (!reward) return null
+
+  const confirm = () => {
+    rejectReward.mutate(
+      { rewardId: reward.id, reason: reason.trim() || undefined },
+      {
+        onSuccess: () => {
+          setReason('')
+          onClose()
+        },
+      },
+    )
   }
 
   return (
-    <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
-      {(rewards ?? []).map((r) => (
-        <Card key={r.id} className="flex items-center gap-3 p-3">
-          <SafeImage src={r.imageUrl} alt="" className="h-12 w-12 shrink-0 rounded-xl object-cover" />
-          <div className="min-w-0 flex-1">
-            <p className="truncate text-sm font-bold text-ink-900">{r.title}</p>
-            <p className="text-xs text-ink-500">
-              {r.costPoints} pts &middot; {r.stock} left
-            </p>
-          </div>
-          <button
-            onClick={() => handleDelete(r.id, r.title)}
-            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-ink-400 hover:bg-red-50 hover:text-red-600"
-            aria-label="Remove reward"
-          >
-            <Trash2 size={15} />
-          </button>
-        </Card>
-      ))}
-    </div>
+    <Modal open={!!reward} onClose={onClose} title={`Reject "${reward.title}"`}>
+      <div className="space-y-4">
+        <div>
+          <label className="mb-1.5 block text-sm font-medium text-ink-700" htmlFor="reject-reason">
+            Reason (optional, shown to the company)
+          </label>
+          <Input id="reject-reason" value={reason} onChange={(e) => setReason(e.target.value)} placeholder="e.g. Needs a real photo" />
+        </div>
+        <Button className="w-full" variant="danger" disabled={rejectReward.isPending} onClick={confirm}>
+          {rejectReward.isPending ? 'Rejecting…' : 'Reject reward'}
+        </Button>
+      </div>
+    </Modal>
   )
 }

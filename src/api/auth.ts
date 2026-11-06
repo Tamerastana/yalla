@@ -65,3 +65,31 @@ export async function getCurrentUser(): Promise<User | null> {
   if (!userId) return null
   return fetchProfile(userId)
 }
+
+/**
+ * Supabase Auth owns the reset token end-to-end: random, single-use, hashed
+ * server-side, expiring (configurable under Authentication -> Email in the
+ * Supabase dashboard; default 1 hour — set it to 15-30 min there), and it
+ * never reveals whether the email is registered. Rate limiting is also
+ * enforced server-side by Supabase (Authentication -> Rate Limits). This
+ * call itself always resolves without telling the caller whether the email
+ * existed — ForgotPassword.tsx shows the same message either way.
+ */
+export async function requestPasswordReset(email: string): Promise<void> {
+  await supabase.auth.resetPasswordForEmail(email, {
+    redirectTo: `${window.location.origin}/reset-password`,
+  })
+}
+
+/**
+ * Called from the reset-password link, where clicking it already gave the
+ * browser a temporary "recovery" session. Signs out of every session for
+ * this account (including this recovery one) afterwards, so a reset
+ * invalidates whatever session — this device's or a stolen one — prompted
+ * it, and the user re-authenticates fresh with their new password.
+ */
+export async function updatePassword(newPassword: string): Promise<void> {
+  const { error } = await supabase.auth.updateUser({ password: newPassword })
+  if (error) throw new Error(error.message)
+  await supabase.auth.signOut({ scope: 'global' })
+}

@@ -114,12 +114,77 @@ select points, kind, company_id from points_entries where user_id = '00000000-00
 
 reset request.jwt.claim.sub;
 set request.jwt.claim.sub = '00000000-0000-0000-0000-000000000002';
-\echo '--- verified company creates a reward costing 30 pts ---'
-insert into rewards (company_id, title, description, cost_points, image_url, stock, active)
-values ('00000000-0000-0000-0000-000000000002', 'Free Court Hour', 'desc', 30, '', 5, true);
+\echo '--- verified company creates a category, and a reward costing 30 pts (attacker also TRIES to set status=approved directly) ---'
+insert into reward_categories (company_id, name) values ('00000000-0000-0000-0000-000000000002', 'Padel');
+insert into rewards (company_id, category_id, title, description, cost_points, image_url, stock, active, status)
+select '00000000-0000-0000-0000-000000000002', id, 'Free Court Hour', 'desc', 30, '', 5, true, 'approved'
+from reward_categories where name = 'Padel';
+
+select (status = 'pending') as reward_forced_pending_on_insert from rewards where title = 'Free Court Hour';
+select set_config('test.pending_reward_id', (select id::text from rewards where title = 'Free Court Hour'), false);
+
+\echo '--- a player TRIES to create a reward_category for this company (must be blocked by RLS, 0 rows) ---'
+reset request.jwt.claim.sub;
+set request.jwt.claim.sub = '00000000-0000-0000-0000-000000000003';
+do $$
+begin
+  insert into reward_categories (company_id, name) values ('00000000-0000-0000-0000-000000000002', 'Hijacked');
+exception when others then
+  raise notice 'insert correctly blocked: %', sqlerrm;
+end $$;
+select (count(*) = 0) as stranger_category_insert_blocked from reward_categories where name = 'Hijacked';
+
+\echo '--- a stranger player TRIES to see the still-pending reward (must be invisible, 0 rows) ---'
+select (count(*) = 0) as pending_reward_hidden_from_strangers from rewards where title = 'Free Court Hour';
+
+\echo '--- a stranger player TRIES to redeem the still-pending reward by id directly, bypassing SELECT visibility (must raise "not available") ---'
+do $$
+begin
+  perform redeem_reward(current_setting('test.pending_reward_id')::uuid);
+  raise exception 'TEST FAILED: redeemed a pending (unapproved) reward';
+exception when others then
+  if sqlerrm like '%not available%' then
+    raise notice 'pending-reward guard fired as expected: %', sqlerrm;
+  else
+    raise;
+  end if;
+end $$;
+
+reset request.jwt.claim.sub;
+set request.jwt.claim.sub = '00000000-0000-0000-0000-000000000002';
+\echo '--- the owning company CAN still see its own pending reward ---'
+select (count(*) = 1) as own_pending_reward_visible from rewards where title = 'Free Court Hour';
+\echo '--- the owning company TRIES to approve its own reward (must raise, admin-only) ---'
+do $$
+declare v_reward uuid;
+begin
+  select id into v_reward from rewards where title = 'Free Court Hour';
+  perform approve_reward(v_reward);
+  raise exception 'TEST FAILED: a company approved its own reward';
+exception when others then
+  if sqlerrm like '%Yalla admin%' then
+    raise notice 'admin-only guard fired as expected: %', sqlerrm;
+  else
+    raise;
+  end if;
+end $$;
+
+reset request.jwt.claim.sub;
+set request.jwt.claim.sub = '00000000-0000-0000-0000-000000000001';
+\echo '--- the admin approves it ---'
+do $$
+declare v_reward uuid;
+begin
+  select id into v_reward from rewards where title = 'Free Court Hour';
+  perform approve_reward(v_reward);
+end $$;
+select status, reviewed_by from rewards where title = 'Free Court Hour';
 
 reset request.jwt.claim.sub;
 set request.jwt.claim.sub = '00000000-0000-0000-0000-000000000003';
+\echo '--- now a stranger player CAN see the approved reward ---'
+select (count(*) = 1) as approved_reward_visible from rewards where title = 'Free Court Hour';
+
 \echo '--- player 1 (40 pts) redeems the 30-pt reward ---'
 do $$
 declare v_reward uuid;
@@ -145,6 +210,38 @@ exception when others then
     raise;
   end if;
 end $$;
+
+reset request.jwt.claim.sub;
+set request.jwt.claim.sub = '00000000-0000-0000-0000-000000000002';
+\echo '--- company toggles active/stock only (NOT content) -> status must stay approved ---'
+update rewards set active = false, stock = stock + 1 where title = 'Free Court Hour';
+select (status = 'approved') as toggle_did_not_reset_status from rewards where title = 'Free Court Hour';
+update rewards set active = true where title = 'Free Court Hour';
+
+\echo '--- company edits the reward CONTENT -> must bounce back to pending for re-review ---'
+update rewards set description = 'updated description' where title = 'Free Court Hour';
+select (status = 'pending' and reviewed_by is null) as content_edit_reset_to_pending from rewards where title = 'Free Court Hour';
+
+reset request.jwt.claim.sub;
+set request.jwt.claim.sub = '00000000-0000-0000-0000-000000000001';
+\echo '--- the admin rejects it with a reason ---'
+do $$
+declare v_reward uuid;
+begin
+  select id into v_reward from rewards where title = 'Free Court Hour';
+  perform reject_reward(v_reward, 'Needs a real photo');
+end $$;
+select status, rejection_reason from rewards where title = 'Free Court Hour';
+
+reset request.jwt.claim.sub;
+set request.jwt.claim.sub = '00000000-0000-0000-0000-000000000003';
+\echo '--- a stranger player can no longer see the rejected reward ---'
+select (count(*) = 0) as rejected_reward_hidden_from_strangers from rewards where title = 'Free Court Hour';
+
+reset request.jwt.claim.sub;
+set request.jwt.claim.sub = '00000000-0000-0000-0000-000000000002';
+\echo '--- but the owning company can still see it, with the rejection reason ---'
+select status, rejection_reason from rewards where title = 'Free Court Hour';
 
 \echo '--- player TRIES to self-promote to super_admin via direct update (must be silently reverted) ---'
 update profiles set role = 'super_admin' where id = '00000000-0000-0000-0000-000000000003';

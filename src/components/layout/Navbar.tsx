@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import { Link, NavLink, useNavigate } from 'react-router-dom'
-import { Building2, Gift, LogOut, Plus, ShieldCheck, User as UserIcon } from 'lucide-react'
+import { Award, Building2, Gift, LogOut, Plus, ShieldCheck, User as UserIcon } from 'lucide-react'
 import { useAuth } from '../../context/AuthContext'
+import { useTotalPoints } from '../../hooks/usePoints'
 import { Avatar } from '../ui/Avatar'
 import { Button } from '../ui/Button'
 
@@ -14,6 +15,7 @@ export function Navbar() {
   const { user, logOut } = useAuth()
   const [menuOpen, setMenuOpen] = useState(false)
   const navigate = useNavigate()
+  const { total: totalPoints } = useTotalPoints(user?.role === 'user' ? user.id : undefined)
 
   return (
     <header className="sticky top-0 z-40 border-b border-ink-100 bg-white/85 backdrop-blur-md">
@@ -51,7 +53,16 @@ export function Navbar() {
             <Plus size={16} /> Host event
           </Button>
           {user ? (
-            <div className="relative">
+            <div className="relative flex items-center gap-2">
+              {user.role === 'user' && (
+                <Link
+                  to="/points"
+                  className="hidden items-center gap-1.5 rounded-full bg-brand-50 px-3 py-1.5 text-sm font-bold text-brand-700 hover:bg-brand-100 sm:flex"
+                  title="Points balance"
+                >
+                  <Award size={14} /> {totalPoints} pts
+                </Link>
+              )}
               <button
                 onClick={() => setMenuOpen((v) => !v)}
                 className="flex items-center gap-2 rounded-full border border-ink-200 p-1 pr-2 hover:border-brand-300"
@@ -79,6 +90,15 @@ export function Navbar() {
                     >
                       <Gift size={16} /> Rewards
                     </Link>
+                    {user.role === 'user' && (
+                      <Link
+                        to="/points"
+                        onClick={() => setMenuOpen(false)}
+                        className="flex items-center gap-2.5 rounded-xl px-3 py-2.5 text-sm font-medium text-ink-700 hover:bg-ink-50 sm:hidden"
+                      >
+                        <Award size={16} /> Points ({totalPoints})
+                      </Link>
+                    )}
                     {user.role === 'company' && (
                       <Link
                         to="/company"

@@ -9,6 +9,13 @@ export function usePointsHistory(userId: string | undefined) {
   })
 }
 
+/** Summed across every company — a single at-a-glance number for the navbar. */
+export function useTotalPoints(userId: string | undefined) {
+  const query = usePointsHistory(userId)
+  const total = (query.data ?? []).reduce((s, p) => s + (p.kind === 'earned' ? p.points : -p.points), 0)
+  return { total, isLoading: query.isLoading }
+}
+
 export function useRedemptions(userId: string | undefined) {
   return useQuery({
     queryKey: ['redemptions', userId],

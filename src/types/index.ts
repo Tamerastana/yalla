@@ -112,21 +112,36 @@ export interface PointsEntry {
   userId: string
   companyId: string
   eventId?: string
+  rewardId?: string
   points: number
   kind: 'earned' | 'redeemed'
   note: string
   createdAt: string
 }
 
+export type RewardStatus = 'pending' | 'approved' | 'rejected'
+
+export interface RewardCategory {
+  id: string
+  companyId: string
+  name: string
+  createdAt: string
+}
+
 export interface Reward {
   id: string
   companyId: string
+  categoryId?: string
   title: string
   description: string
   costPoints: number
   imageUrl: string
   stock: number
   active: boolean
+  status: RewardStatus
+  rejectionReason?: string
+  reviewedAt?: string
+  reviewedBy?: string
 }
 
 export interface Redemption {

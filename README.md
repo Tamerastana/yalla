@@ -70,17 +70,31 @@ add a reward, redeem it.
     is full, inside the same transaction as the insert.
   - `mark_attended(registration_id)` (RPC): only the event's host can call
     this; awards points atomically, once.
-  - `redeem_reward(reward_id)` (RPC): checks balance and stock, deducts
-    points, decrements stock and issues a redemption code — all in one
-    transaction, so two simultaneous redemptions can't both succeed off a
-    stale read.
+  - `redeem_reward(reward_id)` (RPC): checks balance, stock and that the
+    reward is `approved`, deducts points, decrements stock and issues a
+    redemption code — all in one transaction, so two simultaneous
+    redemptions can't both succeed off a stale read.
   - `verify_company(company_id)` (RPC): only a `super_admin` can call this.
+  - `approve_reward(reward_id)` / `reject_reward(reward_id, reason)` (RPC):
+    only a `super_admin` can call these. A reward is only visible to anyone
+    other than its own company once approved.
+  - `enforce_reward_review_status` (trigger): forces a new reward to
+    `pending`, and a company can never set its own reward's status directly
+    — only an admin, via the RPCs above, can. Editing a reward's actual
+    content (title/description/cost/image) after approval bounces it back
+    to `pending` for re-review; toggling `active` or restocking doesn't.
   - `protect_profile_privileged_columns` (trigger): silently reverts any
     attempt to change your own `role` or `company_verified` outside the
     RPCs above.
   - Points are scoped **per company** (like airline miles), not a shared
     global currency, and can only be redeemed against that same company's
     reward catalogue.
+  - **Password reset** uses Supabase Auth's own `resetPasswordForEmail` /
+    `updateUser` flow — no custom token table. Supabase generates, hashes
+    and expires the reset token itself, and never reveals whether an email
+    is registered. Set the token's expiry window and request rate limits
+    under *Authentication → Email* and *Authentication → Rate Limits* in
+    your Supabase project; no extra environment variable is needed.
 - `supabase/_test_stub_auth.sql` + `supabase/_test_functional.sql` — a local
   smoke test (run against a throwaway Postgres instance, **never** your real
   Supabase project) that exercises every rule above as a non-superuser role.

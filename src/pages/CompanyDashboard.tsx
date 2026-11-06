@@ -1,23 +1,31 @@
 import { useState, type FormEvent } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { AlertTriangle, Award, Check, Gift, Pencil, Plus, ShieldCheck, Ticket, Trash2, Users } from 'lucide-react'
+import { AlertTriangle, Award, Check, Gift, Pencil, Plus, ShieldCheck, Tag, Ticket, Trash2, Users, X } from 'lucide-react'
 import { CATEGORY_META } from '../lib/categories'
 import { formatEventDate } from '../lib/format'
 import { useAuth } from '../context/AuthContext'
 import { useDeleteEvent, useEventsByHost } from '../hooks/useEvents'
 import { useAllRegistrations } from '../hooks/useRegistrations'
-import { useCompanyRewards, useCreateReward, useDeleteReward, useUpdateReward } from '../hooks/useRewards'
+import {
+  useCompanyRewards,
+  useCreateCategory,
+  useCreateReward,
+  useDeleteCategory,
+  useDeleteReward,
+  useRewardCategories,
+  useUpdateReward,
+} from '../hooks/useRewards'
 import { useFulfillRedemptionCode } from '../hooks/usePoints'
 import { useUsersByIds } from '../hooks/useProfiles'
 import { Badge } from '../components/ui/Badge'
 import { Button } from '../components/ui/Button'
 import { Card } from '../components/ui/Card'
 import { EmptyState } from '../components/ui/EmptyState'
-import { FieldError, Input, Label, Textarea } from '../components/ui/Input'
+import { FieldError, Input, Label, Select, Textarea } from '../components/ui/Input'
 import { Modal } from '../components/ui/Modal'
 import { PageLoader } from '../components/ui/Spinner'
 import { SafeImage } from '../components/ui/SafeImage'
-import type { Reward } from '../types'
+import type { Reward, RewardStatus } from '../types'
 
 export function CompanyDashboardPage() {
   const { user } = useAuth()
@@ -141,6 +149,8 @@ export function CompanyDashboardPage() {
         )}
       </div>
 
+      {user.company?.verified && <CategoriesPanel companyId={user.id} />}
+
       <div className="mb-8">
         <div className="mb-3 flex items-center justify-between">
           <h2 className="font-bold text-ink-900">Rewards catalogue</h2>
@@ -155,31 +165,39 @@ export function CompanyDashboardPage() {
         ) : (
           <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
             {rewards.map((r) => (
-              <Card key={r.id} className="flex items-center gap-3 p-3">
-                <SafeImage src={r.imageUrl} alt="" className="h-12 w-12 shrink-0 rounded-xl object-cover" />
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-bold text-ink-900">{r.title}</p>
-                  <p className="text-xs text-ink-500">
-                    {r.costPoints} pts &middot; {r.stock} left
+              <Card key={r.id} className="flex flex-col gap-2.5 p-3">
+                <div className="flex items-center gap-3">
+                  <SafeImage src={r.imageUrl} alt="" className="h-12 w-12 shrink-0 rounded-xl object-cover" />
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-bold text-ink-900">{r.title}</p>
+                    <p className="text-xs text-ink-500">
+                      {r.costPoints} pts &middot; {r.stock} left {!r.active && '· Paused'}
+                    </p>
+                  </div>
+                  <StatusBadge status={r.status} />
+                  <div className="flex shrink-0 gap-1">
+                    <button
+                      onClick={() => setRewardModal(r)}
+                      className="flex h-8 w-8 items-center justify-center rounded-lg text-ink-400 hover:bg-ink-100 hover:text-ink-700"
+                      aria-label="Edit reward"
+                    >
+                      <Pencil size={15} />
+                    </button>
+                    <button
+                      onClick={() => handleDeleteReward(r.id, r.title)}
+                      className="flex h-8 w-8 items-center justify-center rounded-lg text-ink-400 hover:bg-red-50 hover:text-red-600"
+                      aria-label="Delete reward"
+                    >
+                      <Trash2 size={15} />
+                    </button>
+                  </div>
+                </div>
+                {r.status === 'rejected' && r.rejectionReason && (
+                  <p className="rounded-lg bg-red-50 px-2.5 py-1.5 text-xs text-red-700">
+                    <span className="font-semibold">Rejected: </span>
+                    {r.rejectionReason}
                   </p>
-                </div>
-                <Badge tone={r.active ? 'success' : 'neutral'}>{r.active ? 'Active' : 'Paused'}</Badge>
-                <div className="flex shrink-0 gap-1">
-                  <button
-                    onClick={() => setRewardModal(r)}
-                    className="flex h-8 w-8 items-center justify-center rounded-lg text-ink-400 hover:bg-ink-100 hover:text-ink-700"
-                    aria-label="Edit reward"
-                  >
-                    <Pencil size={15} />
-                  </button>
-                  <button
-                    onClick={() => handleDeleteReward(r.id, r.title)}
-                    className="flex h-8 w-8 items-center justify-center rounded-lg text-ink-400 hover:bg-red-50 hover:text-red-600"
-                    aria-label="Delete reward"
-                  >
-                    <Trash2 size={15} />
-                  </button>
-                </div>
+                )}
               </Card>
             ))}
           </div>
@@ -189,6 +207,63 @@ export function CompanyDashboardPage() {
       <RedeemCodePanel />
 
       <RewardFormModal open={rewardModal !== null} onClose={() => setRewardModal(null)} companyId={user.id} reward={rewardModal === 'new' ? null : rewardModal} />
+    </div>
+  )
+}
+
+function StatusBadge({ status }: { status: RewardStatus }) {
+  if (status === 'approved') return <Badge tone="success">Approved</Badge>
+  if (status === 'rejected') return <Badge tone="danger">Rejected</Badge>
+  return <Badge tone="warning">Pending review</Badge>
+}
+
+function CategoriesPanel({ companyId }: { companyId: string }) {
+  const categoriesQuery = useRewardCategories(companyId)
+  const categories = categoriesQuery.data ?? []
+  const createCategory = useCreateCategory(companyId)
+  const deleteCategory = useDeleteCategory(companyId)
+  const [name, setName] = useState('')
+
+  const submit = (e: FormEvent) => {
+    e.preventDefault()
+    const trimmed = name.trim()
+    if (!trimmed) return
+    createCategory.mutate(trimmed, { onSuccess: () => setName('') })
+  }
+
+  return (
+    <div className="mb-8">
+      <h2 className="mb-3 flex items-center gap-1.5 font-bold text-ink-900">
+        <Tag size={16} className="text-brand-500" /> Reward sections
+      </h2>
+      <Card className="p-4">
+        <p className="mb-3 text-xs text-ink-500">Organize your rewards into sections on your store page, e.g. "Food", "Discounts", "Merch".</p>
+        <div className="mb-3 flex flex-wrap gap-2">
+          {categories.map((c) => (
+            <span key={c.id} className="flex items-center gap-1.5 rounded-full border border-ink-200 bg-ink-50 py-1 pl-3 pr-1.5 text-xs font-semibold text-ink-700">
+              {c.name}
+              <button
+                onClick={() => {
+                  if (window.confirm(`Remove section "${c.name}"? Rewards in it won't be deleted, just uncategorized.`)) {
+                    deleteCategory.mutate(c.id)
+                  }
+                }}
+                className="flex h-4 w-4 items-center justify-center rounded-full text-ink-400 hover:bg-ink-200 hover:text-ink-700"
+                aria-label={`Remove ${c.name}`}
+              >
+                <X size={11} />
+              </button>
+            </span>
+          ))}
+          {categories.length === 0 && <p className="text-xs text-ink-400">No sections yet.</p>}
+        </div>
+        <form onSubmit={submit} className="flex gap-2">
+          <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="New section name" className="flex-1" />
+          <Button type="submit" size="sm" disabled={createCategory.isPending || !name.trim()}>
+            <Plus size={14} /> Add
+          </Button>
+        </form>
+      </Card>
     </div>
   )
 }
@@ -220,10 +295,13 @@ function RewardFormModal({
   const [costPoints, setCostPoints] = useState(reward?.costPoints ?? 50)
   const [stock, setStock] = useState(reward?.stock ?? 20)
   const [active, setActive] = useState(reward?.active ?? true)
+  const [categoryId, setCategoryId] = useState(reward?.categoryId ?? '')
   const [imageUrl, setImageUrl] = useState(reward?.imageUrl ?? 'https://images.unsplash.com/photo-1523275335684-37898b6baf30?q=80&w=800&auto=format&fit=crop')
   const [error, setError] = useState('')
   const createReward = useCreateReward()
   const updateReward = useUpdateReward(reward?.id ?? '', companyId)
+  const categoriesQuery = useRewardCategories(companyId)
+  const categories = categoriesQuery.data ?? []
 
   // Reset local state whenever a different reward (or "new") opens in the modal.
   const [openedFor, setOpenedFor] = useState(reward?.id ?? 'new')
@@ -234,6 +312,7 @@ function RewardFormModal({
     setCostPoints(reward?.costPoints ?? 50)
     setStock(reward?.stock ?? 20)
     setActive(reward?.active ?? true)
+    setCategoryId(reward?.categoryId ?? '')
     setImageUrl(reward?.imageUrl ?? 'https://images.unsplash.com/photo-1523275335684-37898b6baf30?q=80&w=800&auto=format&fit=crop')
   }
 
@@ -242,12 +321,12 @@ function RewardFormModal({
     setError('')
     if (isEditing) {
       updateReward.mutate(
-        { title, description, costPoints, stock, active, imageUrl },
+        { title, description, costPoints, stock, active, imageUrl, categoryId: categoryId || undefined },
         { onSuccess: onClose, onError: (err) => setError(err instanceof Error ? err.message : 'Something went wrong.') },
       )
     } else {
       createReward.mutate(
-        { companyId, title, description, costPoints, stock, imageUrl, active: true },
+        { companyId, title, description, costPoints, stock, imageUrl, active: true, categoryId: categoryId || undefined },
         { onSuccess: onClose, onError: (err) => setError(err instanceof Error ? err.message : 'Something went wrong.') },
       )
     }
@@ -257,6 +336,11 @@ function RewardFormModal({
 
   return (
     <Modal open={open} onClose={onClose} title={isEditing ? 'Edit reward' : 'Add a reward'}>
+      {isEditing && reward.status === 'approved' && (
+        <p className="mb-4 rounded-xl bg-amber-50 px-3 py-2.5 text-xs font-medium text-amber-700">
+          Changing the title, description, cost or image will send this reward back for admin review.
+        </p>
+      )}
       <form onSubmit={submit} className="space-y-4">
         <div>
           <Label htmlFor="r-title">Title</Label>
@@ -279,6 +363,17 @@ function RewardFormModal({
         <div>
           <Label htmlFor="r-image">Image URL</Label>
           <Input id="r-image" value={imageUrl} onChange={(e) => setImageUrl(e.target.value)} />
+        </div>
+        <div>
+          <Label htmlFor="r-category">Section</Label>
+          <Select id="r-category" value={categoryId} onChange={(e) => setCategoryId(e.target.value)}>
+            <option value="">No section</option>
+            {categories.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name}
+              </option>
+            ))}
+          </Select>
         </div>
         {isEditing && (
           <label className="flex items-center gap-2 text-sm text-ink-600">

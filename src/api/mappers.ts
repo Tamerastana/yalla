@@ -9,6 +9,7 @@ import type {
   Registration,
   RegistrationStatus,
   Reward,
+  RewardCategory,
   Role,
   SportEvent,
   User,
@@ -103,6 +104,7 @@ export function mapPointsEntry(row: Record<string, unknown>): PointsEntry {
     userId: row.user_id as string,
     companyId: row.company_id as string,
     eventId: (row.event_id as string) ?? undefined,
+    rewardId: (row.reward_id as string) ?? undefined,
     points: row.points as number,
     kind: row.kind as PointsEntry['kind'],
     note: row.note as string,
@@ -114,12 +116,26 @@ export function mapReward(row: Record<string, unknown>): Reward {
   return {
     id: row.id as string,
     companyId: row.company_id as string,
+    categoryId: (row.category_id as string) ?? undefined,
     title: row.title as string,
     description: row.description as string,
     costPoints: row.cost_points as number,
     imageUrl: row.image_url as string,
     stock: row.stock as number,
     active: Boolean(row.active),
+    status: row.status as Reward['status'],
+    rejectionReason: (row.rejection_reason as string) ?? undefined,
+    reviewedAt: (row.reviewed_at as string) ?? undefined,
+    reviewedBy: (row.reviewed_by as string) ?? undefined,
+  }
+}
+
+export function mapRewardCategory(row: Record<string, unknown>): RewardCategory {
+  return {
+    id: row.id as string,
+    companyId: row.company_id as string,
+    name: row.name as string,
+    createdAt: row.created_at as string,
   }
 }
 
