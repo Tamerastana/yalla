@@ -1,0 +1,42 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
+  --color-ink: #163a4a;
+  --color-brand: #1b5866;
+  --color-brand-dark: #123f4a;
+  --color-teal: #2a8c95;
+  --color-mint: #e2f1f0;
+  --color-coral: #ef7d5b;
+  --color-peach: #fbe6da;
+  --color-cream: #fdf8f3;
+  --color-muted: #5b6b73;
+}
+
+html { scroll-behavior: smooth; }
+body { @apply bg-cream text-ink font-sans antialiased; }
+
+@utility card {
+  @apply rounded-2xl border border-black/5 bg-white shadow-[0_2px_14px_-6px_rgba(22,58,74,0.15)];
+}
+@utility btn {
+  @apply inline-flex items-center justify-center gap-2 rounded-xl px-5 py-2.5 font-semibold transition disabled:opacity-50 disabled:cursor-not-allowed;
+}
+@utility btn-primary {
+  @apply btn bg-brand text-white hover:bg-brand-dark;
+}
+@utility btn-coral {
+  @apply btn bg-coral text-white hover:brightness-95;
+}
+@utility btn-ghost {
+  @apply btn border border-ink/15 bg-white text-ink hover:bg-mint;
+}
+@utility input {
+  @apply w-full rounded-xl border border-ink/15 bg-white px-3.5 py-2.5 text-sm outline-none transition placeholder:text-ink/40 focus:border-teal focus:ring-2 focus:ring-teal/20;
+}
+@utility label {
+  @apply mb-1.5 block text-sm font-semibold;
+}
+@utility chip {
+  @apply inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-semibold;
+}
