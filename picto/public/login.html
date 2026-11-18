@@ -3,44 +3,49 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Picto — Log in</title>
+  <title>Log in</title>
   <link rel="stylesheet" href="/style.css">
 </head>
-<body>
-  <main class="auth-wrap">
-    <!-- Decorative panel (hidden on small screens) -->
-    <div class="auth-hero" aria-hidden="true">
-      <div class="tile" style="left:24px;top:28px;width:150px;height:190px"></div>
-      <div class="tile" style="right:24px;top:60px;width:120px;height:120px"></div>
-      <div class="tile" style="right:40px;top:200px;width:150px;height:150px"></div>
-      <div class="tile" style="left:40px;top:240px;width:100px;height:100px"></div>
-      <div class="caption">Share the moments<br>that matter.</div>
-    </div>
+<body class="auth-page">
+  <main class="auth-main">
+    <!-- Left hero: tagline + CSS phone collage (decorative) -->
+    <section class="auth-hero" aria-hidden="true">
+      <h1>See everyday moments<br>from your <span class="pop">close friends.</span></h1>
+      <div class="collage">
+        <div class="phone p1"></div>
+        <div class="phone p2"></div>
+        <div class="phone p3"></div>
+        <div class="bubble heart">❤️</div>
+        <div class="bubble star">⭐</div>
+      </div>
+    </section>
 
+    <!-- Right column -->
     <div class="auth-col">
       <section class="card auth-box">
-        <div class="logo">
-          <span class="logo-mark">
-            <svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round"><circle cx="12" cy="12" r="4.5"/><path d="M4 8V6a2 2 0 0 1 2-2h2M16 4h2a2 2 0 0 1 2 2v2M20 16v2a2 2 0 0 1-2 2h-2M8 20H6a2 2 0 0 1-2-2v-2"/></svg>
-          </span>
-          Picto
-        </div>
+        <!-- Empty space reserved for a logo (no logo placed here) -->
+        <div class="logo-slot">LOGO</div>
 
         <!-- LOGIN FORM -->
         <form id="loginForm" novalidate>
-          <input class="input" name="username" placeholder="Username or email" autocomplete="username" required>
+          <h2>Log in</h2>
+          <input class="input" name="username" placeholder="Username or email address" autocomplete="username" required>
           <div class="pw-field">
             <input class="input" name="password" type="password" placeholder="Password" autocomplete="current-password" required>
             <button type="button" class="pw-toggle" hidden>Show</button>
           </div>
           <button class="btn block" type="submit" disabled>Log in</button>
           <p class="error" id="loginError" role="alert"></p>
+          <p class="forgot"><button type="button" class="link-btn" id="forgot">Forgotten password?</button></p>
+          <div class="divider">OR</div>
+          <button type="button" class="btn secondary block" id="toSignup">Create new account</button>
         </form>
 
         <!-- SIGN-UP FORM -->
         <form id="signupForm" novalidate hidden>
-          <p class="sub" style="margin-top:0">Sign up to share photos with your friends.</p>
-          <input class="input" name="email" type="email" placeholder="Email" autocomplete="email" required>
+          <h2>Create a new account</h2>
+          <p class="sub">Sign up to share photos with your friends.</p>
+          <input class="input" name="email" type="email" placeholder="Email address" autocomplete="email" required>
           <input class="input" name="fullName" placeholder="Full name" autocomplete="name" required>
           <input class="input" name="username" placeholder="Username" autocomplete="username" required>
           <div class="pw-field">
@@ -49,17 +54,25 @@
           </div>
           <button class="btn block" type="submit" disabled>Sign up</button>
           <p class="error" id="signupError" role="alert"></p>
+          <div class="divider">OR</div>
+          <button type="button" class="btn secondary block" id="toLogin">I already have an account</button>
         </form>
       </section>
 
       <section class="card auth-switch">
         <span id="switchText">Don't have an account?</span>
-        <a href="#" id="switchLink">Sign up</a>
+        <button class="link-btn" id="switchLink" type="button">Sign up</button>
       </section>
 
       <p class="hint">Demo admin: <b>admin</b> / <b>admin123</b> (change via ADMIN_PASSWORD)</p>
     </div>
   </main>
+
+  <footer class="auth-footer">
+    <a href="#">About</a><a href="#">Help</a><a href="#">Privacy</a><a href="#">Terms</a>
+    <a href="#">Locations</a><a href="#">Contact</a>
+    <span>© 2026 Picto</span>
+  </footer>
 
   <script>
     const loginForm = document.getElementById('loginForm');
@@ -67,19 +80,22 @@
     const switchLink = document.getElementById('switchLink');
     const switchText = document.getElementById('switchText');
 
-    // Toggle between log in / sign up
     function showSignup(on) {
       loginForm.hidden = on;
       signupForm.hidden = !on;
       switchText.textContent = on ? 'Have an account?' : "Don't have an account?";
       switchLink.textContent = on ? 'Log in' : 'Sign up';
-      document.title = on ? 'Picto — Sign up' : 'Picto — Log in';
+      document.title = on ? 'Sign up' : 'Log in';
       (on ? signupForm : loginForm).querySelector('input').focus();
     }
-    switchLink.addEventListener('click', (e) => { e.preventDefault(); showSignup(loginForm.hidden === false); });
+    switchLink.addEventListener('click', () => showSignup(loginForm.hidden === false));
+    document.getElementById('toSignup').addEventListener('click', () => showSignup(true));
+    document.getElementById('toLogin').addEventListener('click', () => showSignup(false));
+    document.getElementById('forgot').addEventListener('click', () =>
+      alert('Password reset is not part of this demo. Ask an admin to reset it, or sign up a new account.'));
     if (location.hash === '#signup') showSignup(true);
 
-    // Enable submit only when every field is filled; show/hide password button
+    // Enable submit only when every field is filled; wire show/hide password
     for (const form of [loginForm, signupForm]) {
       const btn = form.querySelector('button[type=submit]');
       const pw = form.querySelector('input[type=password]');
