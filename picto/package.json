@@ -1,0 +1,11 @@
+{
+  "name": "picto",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Instagram-style photo sharing app with login and an admin database page",
+  "main": "server.js",
+  "engines": { "node": ">=22.13" },
+  "scripts": {
+    "start": "node --no-warnings=ExperimentalWarning server.js"
+  }
+}

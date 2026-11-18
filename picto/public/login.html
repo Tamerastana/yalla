@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Picto — Log in</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <main class="auth-wrap">
+    <!-- Decorative panel (hidden on small screens) -->
+    <div class="auth-hero" aria-hidden="true">
+      <div class="tile" style="left:24px;top:28px;width:150px;height:190px"></div>
+      <div class="tile" style="right:24px;top:60px;width:120px;height:120px"></div>
+      <div class="tile" style="right:40px;top:200px;width:150px;height:150px"></div>
+      <div class="tile" style="left:40px;top:240px;width:100px;height:100px"></div>
+      <div class="caption">Share the moments<br>that matter.</div>
+    </div>
+
+    <div class="auth-col">
+      <section class="card auth-box">
+        <div class="logo">
+          <span class="logo-mark">
+            <svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round"><circle cx="12" cy="12" r="4.5"/><path d="M4 8V6a2 2 0 0 1 2-2h2M16 4h2a2 2 0 0 1 2 2v2M20 16v2a2 2 0 0 1-2 2h-2M8 20H6a2 2 0 0 1-2-2v-2"/></svg>
+          </span>
+          Picto
+        </div>
+
+        <!-- LOGIN FORM -->
+        <form id="loginForm" novalidate>
+          <input class="input" name="username" placeholder="Username or email" autocomplete="username" required>
+          <div class="pw-field">
+            <input class="input" name="password" type="password" placeholder="Password" autocomplete="current-password" required>
+            <button type="button" class="pw-toggle" hidden>Show</button>
+          </div>
+          <button class="btn block" type="submit" disabled>Log in</button>
+          <p class="error" id="loginError" role="alert"></p>
+        </form>
+
+        <!-- SIGN-UP FORM -->
+        <form id="signupForm" novalidate hidden>
+          <p class="sub" style="margin-top:0">Sign up to share photos with your friends.</p>
+          <input class="input" name="email" type="email" placeholder="Email" autocomplete="email" required>
+          <input class="input" name="fullName" placeholder="Full name" autocomplete="name" required>
+          <input class="input" name="username" placeholder="Username" autocomplete="username" required>
+          <div class="pw-field">
+            <input class="input" name="password" type="password" placeholder="Password (min 6 characters)" autocomplete="new-password" required>
+            <button type="button" class="pw-toggle" hidden>Show</button>
+          </div>
+          <button class="btn block" type="submit" disabled>Sign up</button>
+          <p class="error" id="signupError" role="alert"></p>
+        </form>
+      </section>
+
+      <section class="card auth-switch">
+        <span id="switchText">Don't have an account?</span>
+        <a href="#" id="switchLink">Sign up</a>
+      </section>
+
+      <p class="hint">Demo admin: <b>admin</b> / <b>admin123</b> (change via ADMIN_PASSWORD)</p>
+    </div>
+  </main>
+
+  <script>
+    const loginForm = document.getElementById('loginForm');
+    const signupForm = document.getElementById('signupForm');
+    const switchLink = document.getElementById('switchLink');
+    const switchText = document.getElementById('switchText');
+
+    // Toggle between log in / sign up
+    function showSignup(on) {
+      loginForm.hidden = on;
+      signupForm.hidden = !on;
+      switchText.textContent = on ? 'Have an account?' : "Don't have an account?";
+      switchLink.textContent = on ? 'Log in' : 'Sign up';
+      document.title = on ? 'Picto — Sign up' : 'Picto — Log in';
+      (on ? signupForm : loginForm).querySelector('input').focus();
+    }
+    switchLink.addEventListener('click', (e) => { e.preventDefault(); showSignup(loginForm.hidden === false); });
+    if (location.hash === '#signup') showSignup(true);
+
+    // Enable submit only when every field is filled; show/hide password button
+    for (const form of [loginForm, signupForm]) {
+      const btn = form.querySelector('button[type=submit]');
+      const pw = form.querySelector('input[type=password]');
+      const toggle = form.querySelector('.pw-toggle');
+      form.addEventListener('input', () => {
+        btn.disabled = [...form.querySelectorAll('input')].some((i) => !i.value.trim());
+        toggle.hidden = !pw.value;
+      });
+      toggle.addEventListener('click', () => {
+        const show = pw.type === 'password';
+        pw.type = show ? 'text' : 'password';
+        toggle.textContent = show ? 'Hide' : 'Show';
+      });
+    }
+
+    async function submit(form, url, errorEl) {
+      const btn = form.querySelector('button[type=submit]');
+      errorEl.textContent = '';
+      btn.disabled = true;
+      const label = btn.textContent;
+      btn.textContent = 'Please wait…';
+      try {
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(Object.fromEntries(new FormData(form))),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Something went wrong');
+        location.href = data.role === 'admin' ? '/admin' : '/feed';
+      } catch (err) {
+        errorEl.textContent = err.message;
+        btn.disabled = false;
+        btn.textContent = label;
+      }
+    }
+
+    loginForm.addEventListener('submit', (e) => { e.preventDefault(); submit(loginForm, '/api/login', document.getElementById('loginError')); });
+    signupForm.addEventListener('submit', (e) => { e.preventDefault(); submit(signupForm, '/api/register', document.getElementById('signupError')); });
+  </script>
+</body>
+</html>

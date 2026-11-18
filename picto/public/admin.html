@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Picto Admin — Database</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner" style="max-width:1200px">
+      <span class="logo">
+        <span class="logo-mark"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round"><circle cx="12" cy="12" r="4.5"/><path d="M4 8V6a2 2 0 0 1 2-2h2M16 4h2a2 2 0 0 1 2 2v2M20 16v2a2 2 0 0 1-2 2h-2M8 20H6a2 2 0 0 1-2-2v-2"/></svg></span>
+        Picto <span class="muted" style="font-weight:600;font-size:16px">Admin</span>
+      </span>
+      <nav class="nav">
+        <a class="btn secondary small" href="/feed">Back to app</a>
+        <button class="btn small" id="logoutBtn">Log out</button>
+      </nav>
+    </div>
+  </header>
+
+  <main class="admin">
+    <section class="stats-row" id="stats"></section>
+
+    <section class="card" style="padding:16px;display:flex;flex-direction:column;gap:12px">
+      <div class="row" style="justify-content:space-between">
+        <div><b style="font-size:16px">Database</b> <span class="muted" id="rowCount"></span></div>
+        <input class="input search" id="search" placeholder="Filter rows…">
+      </div>
+      <div class="tabs" id="tabs"></div>
+      <div class="table-wrap" style="max-height:60vh"><table id="table"></table></div>
+      <p class="muted" style="margin:0;font-size:12px">Passwords are stored as salted scrypt hashes — only the first characters of each hash are shown, and plain-text passwords are never stored.</p>
+    </section>
+  </main>
+
+  <script>
+    const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    let current = 'users', data = null;
+
+    async function api(url, opts = {}) {
+      const res = await fetch(url, { headers: { 'Content-Type': 'application/json' }, ...opts });
+      if (res.status === 401 || res.status === 403) { location.href = '/login'; throw new Error('Not allowed'); }
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error || 'Request failed');
+      return body;
+    }
+
+    async function loadStats() {
+      const s = await api('/api/admin/stats');
+      const items = [['Users', s.users], ['Posts', s.posts], ['Comments', s.comments], ['Likes', s.likes], ['Logins (24h)', s.logins_today], ['Failed logins (24h)', s.failed_today]];
+      document.getElementById('stats').innerHTML = items.map(([l, n]) => `<div class="card stat"><div class="num">${n}</div><div class="label">${l}</div></div>`).join('');
+    }
+
+    function cell(col, val) {
+      if (val === null || val === undefined) return '<span class="muted">NULL</span>';
+      if (current === 'login_attempts' && col === 'success') return val ? '<span class="badge ok">success</span>' : '<span class="badge bad">failed</span>';
+      if (col === 'role') return `<span class="badge ${val === 'admin' ? 'admin' : ''}">${esc(val)}</span>`;
+      if (col === 'image_path') return `<a href="${esc(val)}" target="_blank"><img src="${esc(val)}" alt="" style="width:36px;height:36px;object-fit:cover;border-radius:4px;vertical-align:middle"></a>`;
+      if (col === 'password_hash' || col === 'token') return `<code>${esc(val)}</code>`;
+      return esc(val);
+    }
+
+    function render() {
+      const q = document.getElementById('search').value.toLowerCase();
+      const rows = data.rows.filter((r) => !q || Object.values(r).some((v) => String(v).toLowerCase().includes(q)));
+      const actions = ['users', 'posts', 'comments'].includes(current);
+      document.getElementById('rowCount').textContent = `· ${current} · ${rows.length} row${rows.length === 1 ? '' : 's'}`;
+      document.getElementById('table').innerHTML = `
+        <thead><tr>${data.columns.map((c) => `<th>${esc(c)}</th>`).join('')}${actions ? '<th>Actions</th>' : ''}</tr></thead>
+        <tbody>${rows.length ? rows.map((r) => `<tr>${data.columns.map((c) => `<td title="${esc(r[c])}">${cell(c, r[c])}</td>`).join('')}${actions ? `<td>${rowActions(r)}</td>` : ''}</tr>`).join('')
+          : `<tr><td colspan="${data.columns.length + 1}" class="muted" style="text-align:center;padding:24px">No rows</td></tr>`}</tbody>`;
+    }
+
+    function rowActions(r) {
+      if (current === 'users') return `
+        <button class="btn secondary small" data-role="${r.id}" data-to="${r.role === 'admin' ? 'user' : 'admin'}">${r.role === 'admin' ? 'Make user' : 'Make admin'}</button>
+        <button class="btn danger small" data-del="users" data-id="${r.id}">Delete</button>`;
+      return `<button class="btn danger small" data-del="${current}" data-id="${r.id}">Delete</button>`;
+    }
+
+    async function loadTable(name) {
+      current = name;
+      document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t.dataset.table === name));
+      data = await api(`/api/admin/tables/${name}`);
+      render();
+    }
+
+    document.getElementById('table').addEventListener('click', async (e) => {
+      const b = e.target.closest('button');
+      if (!b) return;
+      try {
+        if (b.dataset.role) {
+          await api(`/api/admin/users/${b.dataset.role}`, { method: 'PATCH', body: JSON.stringify({ role: b.dataset.to }) });
+        } else if (b.dataset.del) {
+          if (!confirm(`Delete this ${b.dataset.del.replace(/s$/, '')}? This cannot be undone.`)) return;
+          const url = b.dataset.del === 'users' ? `/api/admin/users/${b.dataset.id}`
+                    : b.dataset.del === 'posts' ? `/api/posts/${b.dataset.id}` : `/api/admin/comments/${b.dataset.id}`;
+          await api(url, { method: 'DELETE' });
+        }
+        await Promise.all([loadTable(current), loadStats()]);
+      } catch (err) { alert(err.message); }
+    });
+
+    document.getElementById('search').addEventListener('input', render);
+    document.getElementById('logoutBtn').addEventListener('click', async () => { await fetch('/api/logout', { method: 'POST' }); location.href = '/login'; });
+
+    (async () => {
+      const { tables } = await api('/api/admin/tables');
+      const tabs = document.getElementById('tabs');
+      tabs.innerHTML = tables.map((t) => `<button class="tab" data-table="${t}">${t}</button>`).join('');
+      tabs.addEventListener('click', (e) => { const t = e.target.closest('.tab'); if (t) loadTable(t.dataset.table); });
+      await Promise.all([loadStats(), loadTable('users')]);
+    })();
+  </script>
+</body>
+</html>

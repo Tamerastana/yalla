@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Picto</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <a href="/feed" class="logo" style="color:inherit;text-decoration:none">
+        <span class="logo-mark"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round"><circle cx="12" cy="12" r="4.5"/><path d="M4 8V6a2 2 0 0 1 2-2h2M16 4h2a2 2 0 0 1 2 2v2M20 16v2a2 2 0 0 1-2 2h-2M8 20H6a2 2 0 0 1-2-2v-2"/></svg></span>
+        Picto
+      </a>
+      <nav class="nav">
+        <a class="btn secondary small" href="/feed">Home</a>
+        <a class="btn secondary small" id="myProfile" href="#">Profile</a>
+        <a class="btn secondary small" id="adminLink" href="/admin" hidden>Admin</a>
+        <button class="btn small" id="logoutBtn">Log out</button>
+      </nav>
+    </div>
+  </header>
+
+  <main class="container" id="main"></main>
+
+  <script>
+    const main = document.getElementById('main');
+    let me = null;
+
+    const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    const avatar = (name, cls = '') => `<span class="avatar ${cls}">${esc(name[0])}</span>`;
+    const userLink = (u) => `<a href="/u/${encodeURIComponent(u)}" style="color:inherit;font-weight:600">${esc(u)}</a>`;
+    function timeAgo(sqlDate) {
+      const s = (Date.now() - new Date(sqlDate.replace(' ', 'T') + 'Z')) / 1000;
+      if (s < 60) return 'just now';
+      for (const [n, u] of [[86400 * 7, 'w'], [86400, 'd'], [3600, 'h'], [60, 'm']]) if (s >= n) return Math.floor(s / n) + u + ' ago';
+    }
+
+    async function api(url, opts = {}) {
+      const res = await fetch(url, { headers: { 'Content-Type': 'application/json' }, ...opts });
+      if (res.status === 401) { location.href = '/login'; throw new Error('Logged out'); }
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Request failed');
+      return data;
+    }
+
+    const heart = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 21s-7.5-4.6-9.5-9.2C1.2 8.6 3.2 5 6.7 5c2.1 0 3.6 1.2 4.3 2.4h2C13.7 6.2 15.2 5 17.3 5c3.5 0 5.5 3.6 4.2 6.8C19.5 16.4 12 21 12 21z"/></svg>';
+
+    function postHtml(p) {
+      const canDelete = p.user_id === me.id || me.role === 'admin';
+      return `
+      <article class="card post" data-id="${p.id}">
+        <div class="post-head">
+          ${avatar(p.username)}
+          <span class="who">${userLink(p.username)}</span>
+          ${canDelete ? '<button class="btn secondary small" data-act="delete">Delete</button>' : ''}
+        </div>
+        <img class="photo" src="${esc(p.image_path)}" alt="Photo by ${esc(p.username)}" loading="lazy">
+        <div class="post-body">
+          <div class="actions">
+            <button class="icon-btn ${p.liked ? 'liked' : ''}" data-act="like" aria-label="Like">${heart}</button>
+          </div>
+          <b class="likes">${p.like_count} like${p.like_count === 1 ? '' : 's'}</b>
+          ${p.caption ? `<div>${userLink(p.username)} ${esc(p.caption)}</div>` : ''}
+          <div class="comments">
+            ${p.comments.map((c) => `<div>${userLink(c.username)} ${esc(c.text)}</div>`).join('')}
+          </div>
+          <span class="time">${timeAgo(p.created_at)}</span>
+          <form class="comment-form" data-act="comment">
+            <input name="text" placeholder="Add a comment…" maxlength="500" autocomplete="off">
+            <button class="btn small secondary" type="submit">Post</button>
+          </form>
+        </div>
+      </article>`;
+    }
+
+    // Like / delete / comment handlers (event delegation)
+    main.addEventListener('click', async (e) => {
+      const btn = e.target.closest('[data-act]');
+      const post = e.target.closest('.post');
+      if (!btn || !post || btn.tagName === 'FORM') return;
+      const id = post.dataset.id;
+      try {
+        if (btn.dataset.act === 'like') {
+          const r = await api(`/api/posts/${id}/like`, { method: 'POST' });
+          btn.classList.toggle('liked', r.liked);
+          post.querySelector('.likes').textContent = `${r.like_count} like${r.like_count === 1 ? '' : 's'}`;
+        } else if (btn.dataset.act === 'delete' && confirm('Delete this post?')) {
+          await api(`/api/posts/${id}`, { method: 'DELETE' });
+          post.remove();
+        }
+      } catch (err) { alert(err.message); }
+    });
+    main.addEventListener('submit', async (e) => {
+      const form = e.target.closest('form[data-act=comment]');
+      if (!form) return;
+      e.preventDefault();
+      const text = form.text.value.trim();
+      if (!text) return;
+      try {
+        await api(`/api/posts/${form.closest('.post').dataset.id}/comments`, { method: 'POST', body: JSON.stringify({ text }) });
+        form.closest('.post').querySelector('.comments').insertAdjacentHTML('beforeend', `<div>${userLink(me.username)} ${esc(text)}</div>`);
+        form.reset();
+      } catch (err) { alert(err.message); }
+    });
+
+    // ---- Feed view
+    async function renderFeed() {
+      main.innerHTML = `
+        <section class="card composer">
+          <b>Create a new post</b>
+          <img class="preview" id="preview" alt="">
+          <input type="file" id="file" accept="image/png,image/jpeg,image/gif,image/webp">
+          <textarea class="input" id="caption" placeholder="Write a caption…" maxlength="2200"></textarea>
+          <div class="row"><button class="btn" id="shareBtn" disabled>Share</button><span class="error" id="postError"></span></div>
+        </section>
+        <div id="posts" style="display:flex;flex-direction:column;gap:20px"></div>`;
+
+      let imageData = null;
+      const file = document.getElementById('file'), preview = document.getElementById('preview'), shareBtn = document.getElementById('shareBtn');
+      file.addEventListener('change', () => {
+        const f = file.files[0];
+        if (!f) return;
+        if (f.size > 4 * 1024 * 1024) { document.getElementById('postError').textContent = 'Image must be under 4 MB'; file.value = ''; return; }
+        const reader = new FileReader();
+        reader.onload = () => { imageData = reader.result; preview.src = imageData; preview.style.display = 'block'; shareBtn.disabled = false; };
+        reader.readAsDataURL(f);
+      });
+      shareBtn.addEventListener('click', async () => {
+        shareBtn.disabled = true;
+        try {
+          await api('/api/posts', { method: 'POST', body: JSON.stringify({ image: imageData, caption: document.getElementById('caption').value }) });
+          renderFeed();
+        } catch (err) { document.getElementById('postError').textContent = err.message; shareBtn.disabled = false; }
+      });
+
+      const { posts } = await api('/api/posts');
+      document.getElementById('posts').innerHTML = posts.length
+        ? posts.map(postHtml).join('')
+        : '<div class="card empty">No posts yet — share the first photo!</div>';
+    }
+
+    // ---- Profile view (/u/:username)
+    async function renderProfile(username) {
+      const p = await api(`/api/users/${encodeURIComponent(username)}`);
+      document.title = `${p.user.full_name} (@${p.user.username}) • Picto`;
+      main.innerHTML = `
+        <section class="card profile-head">
+          ${avatar(p.user.username, 'lg')}
+          <div style="flex:1">
+            <div class="row"><b style="font-size:20px">${esc(p.user.username)}</b>
+              ${p.is_me ? '<button class="btn secondary small" id="editBtn">Edit profile</button>'
+                        : `<button class="btn small ${p.following ? 'secondary' : ''}" id="followBtn">${p.following ? 'Following' : 'Follow'}</button>`}
+            </div>
+            <div class="stats"><span><b>${p.posts.length}</b> posts</span><span><b id="followers">${p.followers}</b> followers</span><span><b>${p.following_count}</b> following</span></div>
+            <div><b>${esc(p.user.full_name)}</b></div>
+            <div class="muted">${esc(p.user.bio)}</div>
+          </div>
+        </section>
+        ${p.posts.length ? `<div class="grid">${p.posts.map((x) => `<img src="${esc(x.image_path)}" alt="" title="${esc(x.caption)}">`).join('')}</div>` : '<div class="card empty">No posts yet</div>'}
+        <div style="display:flex;flex-direction:column;gap:20px">${p.posts.map(postHtml).join('')}</div>`;
+
+      document.getElementById('followBtn')?.addEventListener('click', async (e) => {
+        const r = await api(`/api/users/${encodeURIComponent(username)}/follow`, { method: 'POST' });
+        e.target.textContent = r.following ? 'Following' : 'Follow';
+        e.target.classList.toggle('secondary', r.following);
+        const f = document.getElementById('followers'); f.textContent = Number(f.textContent) + (r.following ? 1 : -1);
+      });
+      document.getElementById('editBtn')?.addEventListener('click', async () => {
+        const fullName = prompt('Full name', p.user.full_name); if (fullName === null) return;
+        const bio = prompt('Bio (max 150 chars)', p.user.bio); if (bio === null) return;
+        try { await api('/api/me', { method: 'PATCH', body: JSON.stringify({ fullName, bio }) }); renderProfile(username); }
+        catch (err) { alert(err.message); }
+      });
+    }
+
+    document.getElementById('logoutBtn').addEventListener('click', async () => {
+      await fetch('/api/logout', { method: 'POST' });
+      location.href = '/login';
+    });
+
+    (async () => {
+      me = (await api('/api/me')).user;
+      if (!me) return (location.href = '/login');
+      document.getElementById('myProfile').href = `/u/${encodeURIComponent(me.username)}`;
+      document.getElementById('adminLink').hidden = me.role !== 'admin';
+      const m = location.pathname.match(/^\/u\/(.+)$/);
+      try { m ? await renderProfile(decodeURIComponent(m[1])) : await renderFeed(); }
+      catch (err) { main.innerHTML = `<div class="card empty">${esc(err.message)}</div>`; }
+    })();
+  </script>
+</body>
+</html>
